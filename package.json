@@ -1,0 +1,101 @@
+{
+  "name": "codebase-town-visualizer",
+  "displayName": "Codebase Town Visualizer",
+  "description": "Visualize JavaScript and TypeScript workspaces as a deterministic 2D town map.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.92.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:codebaseTown.openMap",
+    "onCommand:codebaseTown.refreshMap",
+    "onCommand:codebaseTown.focusCurrentFile",
+    "onCommand:codebaseTown.clearCache"
+  ],
+  "main": "./dist/extension/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codebaseTown.openMap",
+        "title": "Codebase Town: Open Map"
+      },
+      {
+        "command": "codebaseTown.refreshMap",
+        "title": "Codebase Town: Refresh Map"
+      },
+      {
+        "command": "codebaseTown.focusCurrentFile",
+        "title": "Codebase Town: Focus Current File"
+      },
+      {
+        "command": "codebaseTown.clearCache",
+        "title": "Codebase Town: Clear Cache"
+      }
+    ],
+    "configuration": {
+      "title": "Codebase Town",
+      "properties": {
+        "codebaseTown.exclude": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional folder or glob-like path fragments to exclude during analysis."
+        },
+        "codebaseTown.includeExternalPackages": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show external package dependency anchors in the map."
+        },
+        "codebaseTown.maxFiles": {
+          "type": "number",
+          "default": 1500,
+          "description": "Maximum supported JS/TS files to analyze before stopping with a size warning."
+        },
+        "codebaseTown.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically refresh the map when supported source files or config files change."
+        },
+        "codebaseTown.showTypeOnlyImports": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show type-only import roads by default."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "compile:extension": "esbuild src/extension/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension/extension.js --sourcemap",
+    "compile:webview": "vite build",
+    "compile": "npm run clean && npm run compile:extension && npm run compile:webview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "tsc --noEmit",
+    "package": "npm run compile"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "elkjs": "^0.12.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "ts-morph": "^23.0.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/vscode": "^1.92.0",
+    "esbuild": "^0.23.1",
+    "vitest": "^2.0.5"
+  }
+}
