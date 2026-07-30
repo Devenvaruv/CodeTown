@@ -36,6 +36,10 @@ export interface GraphEdge {
   isAggregated?: boolean;
 }
 
+export type GatewaySide = "top" | "right" | "bottom" | "left";
+export type RoadRouteKind = "trunk" | "collector" | "branch" | "direct";
+export type RoadEndpointRole = "provider" | "consumer";
+
 export interface GraphLayoutOptions {
   direction?: LayoutDirection;
   previousPositions?: Map<string, Point>;
@@ -87,12 +91,23 @@ export interface LayoutNode extends PositionedGraphNode {
 
 export interface LayoutRoad extends RoutedGraphEdge {
   connectionId: string;
+  connectionIds: string[];
   sourceId: string;
   targetId: string;
   level: "folder" | "file";
   points: Point[];
   isAggregated: boolean;
   dependencyCount: number;
+  routeKind: RoadRouteKind;
+  trunkId?: string;
+  providerFolderId?: string;
+  consumerFolderId?: string;
+  endpointRole?: RoadEndpointRole;
+  participantFileIds: string[];
+  symbolCount: number;
+  dependencyTypes: ImportConnection["type"][];
+  sourceGateway?: FolderGateway;
+  targetGateway?: FolderGateway;
 }
 
 export interface TownLayout {
@@ -101,12 +116,31 @@ export interface TownLayout {
   folders: LayoutNode[];
   files: LayoutNode[];
   roads: LayoutRoad[];
+  roadDebug: RoadDebugInfo;
   layoutWarnings: string[];
   usedFallbackLayout: boolean;
 }
 
+export interface RoadDebugInfo {
+  semanticFileDependencyCount: number;
+  generatedFolderBundleCount: number;
+  renderedTrunkCount: number;
+  rejectedTrunkCount: number;
+  duplicateBundleCount: number;
+  diagonalSegmentCount: number;
+  trunksIntersectingFolderBounds: number;
+  trunksIntersectingBuildingBounds: number;
+}
+
 export interface TownLayoutOptions extends GraphLayoutOptions {
   visibleConnections?: ImportConnection[];
+}
+
+export interface FolderGateway {
+  folderId: string;
+  side: GatewaySide;
+  x: number;
+  y: number;
 }
 
 export const GRID_LAYOUT_CONSTANTS = {
@@ -116,7 +150,7 @@ export const GRID_LAYOUT_CONSTANTS = {
   verticalGap: 56,
   folderPadding: 56,
   folderHeaderHeight: 48,
-  folderGap: 120,
+  folderGap: 220,
   maxFolderColumns: 4,
   maxTopLevelColumns: 4,
   targetTopLevelWidth: 1680,
@@ -186,22 +220,17 @@ export async function buildTownLayout(graph: ProjectGraph, expandedFolderIds: Se
   const result = await layoutGraph(visibleGraph.nodes, [], options);
   const folders = result.nodes.filter((node): node is LayoutNode => node.kind === "folder");
   const files = result.nodes.filter((node): node is LayoutNode => node.kind === "file");
-  const routedEdges = result.layoutWarnings.length > 0 ? [] : routeEdgesFromPositionedNodes(visibleGraph.edges, result.nodes);
-  const roads = routedEdges.map((edge): LayoutRoad => ({
-    ...edge,
-    connectionId: edge.connectionId ?? edge.connectionIds?.[0] ?? edge.id,
-    connectionIds: edge.connectionIds ?? (edge.connectionId ? [edge.connectionId] : []),
-    level: edge.level ?? "file",
-    isAggregated: edge.isAggregated ?? false,
-    dependencyCount: edge.dependencyCount ?? 1
-  }));
+  const trunkLayout = result.layoutWarnings.length > 0
+    ? { roads: [], debug: emptyRoadDebug(options.visibleConnections ?? graph.connections) }
+    : buildFolderTrunkRoads(result.nodes, graph, options.visibleConnections ?? graph.connections);
 
   return {
     width: Math.max(result.width, 860),
     height: Math.max(result.height, 640),
     folders,
     files,
-    roads,
+    roads: trunkLayout.roads,
+    roadDebug: trunkLayout.debug,
     layoutWarnings: result.layoutWarnings,
     usedFallbackLayout: result.usedFallbackLayout
   };
@@ -675,6 +704,430 @@ function fallbackHeight(node: GraphNode): number {
     return GRID_LAYOUT_CONSTANTS.fileHeight;
   }
   return node.collapsed ? COLLAPSED_FOLDER_SIZE.height : EMPTY_FOLDER_SIZE.height;
+}
+
+interface RenderDependency {
+  id: string;
+  providerFileId?: string;
+  consumerFileId?: string;
+  providerFolderId: string;
+  consumerFolderId: string;
+  type: ImportConnection["type"];
+  symbolCount: number;
+}
+
+interface FolderDependencyBundle {
+  providerFolderId: string;
+  consumerFolderId: string;
+  dependencies: RenderDependency[];
+}
+
+function buildFolderTrunkRoads(nodes: PositionedGraphNode[], graph: ProjectGraph, connections: ImportConnection[]): { roads: LayoutRoad[]; debug: RoadDebugInfo } {
+  const nodeRects = new Map(nodes.map((node) => [node.id, node]));
+  const folderRects = nodes.filter((node) => node.kind === "folder");
+  const fileRects = nodes.filter((node) => node.kind === "file");
+  const fileMap = new Map(graph.files.map((file) => [file.id, file]));
+  const folderMap = new Map(graph.folders.map((folder) => [folder.id, folder]));
+  const connectionMap = new Map(connections.map((connection) => [connection.id, connection]));
+  const bundles = new Map<string, FolderDependencyBundle>();
+  const duplicateConnectionIds = new Set<string>();
+  const debug: RoadDebugInfo = {
+    ...emptyRoadDebug(connections),
+    semanticFileDependencyCount: connections.filter((connection) => Boolean(connection.targetFileId)).length
+  };
+
+  for (const connection of connections) {
+    if (!connection.targetFileId) {
+      continue;
+    }
+    const providerFile = fileMap.get(connection.targetFileId);
+    const consumerFile = fileMap.get(connection.sourceFileId);
+    if (!providerFile || !consumerFile) {
+      continue;
+    }
+    const providerFolderId = renderedFolderIdForFile(providerFile, folderMap, nodeRects);
+    const consumerFolderId = renderedFolderIdForFile(consumerFile, folderMap, nodeRects);
+    if (!providerFolderId || !consumerFolderId || providerFolderId === consumerFolderId) {
+      continue;
+    }
+    addBundleDependency(
+      bundles,
+      providerFolderId,
+      consumerFolderId,
+      connection.id,
+      connectionMap,
+      duplicateConnectionIds,
+      providerFile.id,
+      consumerFile.id
+    );
+  }
+
+  debug.generatedFolderBundleCount = bundles.size;
+  debug.duplicateBundleCount = duplicateConnectionIds.size;
+  const roads: LayoutRoad[] = [];
+  const renderedBundleKeys = new Set<string>();
+
+  for (const bundle of [...bundles.values()].sort(compareBundles)) {
+    const key = bundleKey(bundle.providerFolderId, bundle.consumerFolderId);
+    if (renderedBundleKeys.has(key)) {
+      debug.duplicateBundleCount += 1;
+      continue;
+    }
+
+    const providerFolder = nodeRects.get(bundle.providerFolderId);
+    const consumerFolder = nodeRects.get(bundle.consumerFolderId);
+    if (!providerFolder || !consumerFolder || bundle.providerFolderId === bundle.consumerFolderId) {
+      debug.rejectedTrunkCount += 1;
+      continue;
+    }
+
+    const trunkId = `trunk:${key}`;
+    const sourceSide = gatewaySideForRelativePosition(providerFolder, consumerFolder);
+    const targetSide = oppositePort(sourceSide);
+    const sourceGateway = gatewayForFolder(providerFolder, sourceSide);
+    const targetGateway = gatewayForFolder(consumerFolder, targetSide);
+    const points = routeTrunkPath(sourceGateway, targetGateway, providerFolder, consumerFolder, folderRects);
+    const diagonalSegments = countDiagonalSegments(points);
+    const folderIntersections = countTrunkFolderIntersections(points, folderRects, new Set([providerFolder.id, consumerFolder.id]));
+    const buildingIntersections = countPathRectIntersections(points, fileRects);
+
+    if (diagonalSegments > 0 || folderIntersections > 0 || buildingIntersections > 0) {
+      debug.rejectedTrunkCount += 1;
+      continue;
+    }
+
+    debug.diagonalSegmentCount += diagonalSegments;
+    debug.trunksIntersectingFolderBounds += folderIntersections;
+    debug.trunksIntersectingBuildingBounds += buildingIntersections;
+
+    roads.push(createLayoutRoad({
+      id: trunkId,
+      sourceId: bundle.providerFolderId,
+      targetId: bundle.consumerFolderId,
+      level: "folder",
+      routeKind: "trunk",
+      trunkId,
+      providerFolderId: bundle.providerFolderId,
+      consumerFolderId: bundle.consumerFolderId,
+      dependencies: bundle.dependencies,
+      points,
+      sourceGateway,
+      targetGateway,
+      isAggregated: true
+    }));
+    renderedBundleKeys.add(key);
+  }
+
+  debug.renderedTrunkCount = roads.length;
+  if (debug.renderedTrunkCount > debug.generatedFolderBundleCount) {
+    debug.duplicateBundleCount += debug.renderedTrunkCount - debug.generatedFolderBundleCount;
+  }
+
+  return {
+    roads: roads.sort((a, b) => routeKindOrder(a.routeKind) - routeKindOrder(b.routeKind) || a.id.localeCompare(b.id)),
+    debug
+  };
+}
+
+function addBundleDependency(
+  bundles: Map<string, FolderDependencyBundle>,
+  providerFolderId: string,
+  consumerFolderId: string,
+  connectionId: string,
+  connectionMap: Map<string, ImportConnection>,
+  duplicateConnectionIds: Set<string>,
+  providerFileId?: string,
+  consumerFileId?: string
+): void {
+  if (providerFolderId === consumerFolderId) {
+    return;
+  }
+  const key = bundleKey(providerFolderId, consumerFolderId);
+  const existing = bundles.get(key) ?? { providerFolderId, consumerFolderId, dependencies: [] };
+  const existingIds = new Set(existing.dependencies.map((dependency) => dependency.id));
+  if (existingIds.has(connectionId)) {
+    duplicateConnectionIds.add(connectionId);
+    return;
+  }
+  const connection = connectionMap.get(connectionId);
+  existing.dependencies.push({
+    id: connectionId,
+    providerFileId,
+    consumerFileId,
+    providerFolderId,
+    consumerFolderId,
+    type: connection?.type ?? "runtime",
+    symbolCount: Math.max(1, connection?.symbols.length ?? 1)
+  });
+  bundles.set(key, existing);
+}
+
+function createLayoutRoad(input: {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  level: "folder" | "file";
+  routeKind: RoadRouteKind;
+  trunkId?: string;
+  providerFolderId?: string;
+  consumerFolderId?: string;
+  endpointRole?: RoadEndpointRole;
+  dependencies: RenderDependency[];
+  points: Point[];
+  sourceGateway?: FolderGateway;
+  targetGateway?: FolderGateway;
+  isAggregated: boolean;
+}): LayoutRoad {
+  const connectionIds = unique(input.dependencies.map((dependency) => dependency.id)).sort();
+  const participantFileIds = uniqueDefined(input.dependencies.flatMap((dependency) => [dependency.providerFileId, dependency.consumerFileId])).sort();
+  const dependencyTypes = unique(input.dependencies.map((dependency) => dependency.type)).sort();
+  const sections = pointsToSections(input.points);
+  return {
+    id: input.id,
+    sourceId: input.sourceId,
+    targetId: input.targetId,
+    level: input.level,
+    routeKind: input.routeKind,
+    trunkId: input.trunkId,
+    providerFolderId: input.providerFolderId,
+    consumerFolderId: input.consumerFolderId,
+    endpointRole: input.endpointRole,
+    connectionId: connectionIds[0] ?? input.id,
+    connectionIds,
+    dependencyCount: input.dependencies.length,
+    symbolCount: sum(input.dependencies.map((dependency) => dependency.symbolCount)),
+    dependencyTypes,
+    participantFileIds,
+    sourceGateway: input.sourceGateway,
+    targetGateway: input.targetGateway,
+    isAggregated: input.isAggregated,
+    sections,
+    points: sections.flatMap((section) => [section.startPoint, ...section.bendPoints, section.endPoint])
+  };
+}
+
+function emptyRoadDebug(connections: ImportConnection[]): RoadDebugInfo {
+  return {
+    semanticFileDependencyCount: connections.filter((connection) => Boolean(connection.targetFileId)).length,
+    generatedFolderBundleCount: 0,
+    renderedTrunkCount: 0,
+    rejectedTrunkCount: 0,
+    duplicateBundleCount: 0,
+    diagonalSegmentCount: 0,
+    trunksIntersectingFolderBounds: 0,
+    trunksIntersectingBuildingBounds: 0
+  };
+}
+
+function renderedFolderIdForFile(file: FileNode, foldersById: Map<string, FolderNode>, nodeRects: Map<string, PositionedGraphNode>): string | undefined {
+  let folderId: string | undefined = file.folderId;
+  while (folderId && folderId !== ".") {
+    if (nodeRects.get(folderId)?.kind === "folder") {
+      return folderId;
+    }
+    folderId = foldersById.get(folderId)?.parentFolderId;
+  }
+  return undefined;
+}
+
+function gatewayForFolder(folder: PositionedGraphNode, side: GatewaySide): FolderGateway {
+  const point = gatewayPoint(folder, side);
+  return {
+    folderId: folder.id,
+    side,
+    x: point.x,
+    y: point.y
+  };
+}
+
+function gatewayPoint(folder: PositionedGraphNode, side: GatewaySide): Point {
+  switch (side) {
+    case "top":
+      return { x: Math.round(folder.x + folder.width / 2), y: Math.round(folder.y) };
+    case "right":
+      return { x: Math.round(folder.x + folder.width), y: Math.round(folder.y + folder.height / 2) };
+    case "bottom":
+      return { x: Math.round(folder.x + folder.width / 2), y: Math.round(folder.y + folder.height) };
+    case "left":
+      return { x: Math.round(folder.x), y: Math.round(folder.y + folder.height / 2) };
+  }
+}
+
+function gatewaySideForRelativePosition(source: PositionedGraphNode, target: PositionedGraphNode): GatewaySide {
+  const dx = center(target).x - center(source).x;
+  const dy = center(target).y - center(source).y;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0 ? "right" : "left";
+  }
+  return dy >= 0 ? "bottom" : "top";
+}
+
+function routeTrunkPath(sourceGateway: FolderGateway, targetGateway: FolderGateway, sourceFolder: PositionedGraphNode, targetFolder: PositionedGraphNode, folders: PositionedGraphNode[]): Point[] {
+  const startPoint = { x: sourceGateway.x, y: sourceGateway.y };
+  const endPoint = { x: targetGateway.x, y: targetGateway.y };
+  const endpointFolderIds = new Set([sourceFolder.id, targetFolder.id]);
+  const blockingFolders = folders.filter((folder) => !endpointFolderIds.has(folder.id) && !isAncestorContainerOfEndpoint(folder, folders, endpointFolderIds));
+  const candidates = [
+    ...corridorRouteCandidates(startPoint, endPoint, sourceGateway.side, targetGateway.side, sourceFolder, targetFolder),
+    ...outerRouteCandidates(startPoint, endPoint, sourceGateway.side, targetGateway.side, folders)
+  ];
+  return candidates.find((candidate) => isOrthogonalPath(candidate) && !pathIntersectsFullRects(candidate, blockingFolders)) ?? [startPoint, endPoint];
+}
+
+function pathIntersectsFullRects(points: Point[], blockers: PositionedGraphNode[]): boolean {
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    if (!previous || !current) {
+      continue;
+    }
+    if (blockers.some((rect) => segmentIntersectsRect(previous, current, rect))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function corridorRouteCandidates(startPoint: Point, endPoint: Point, sourceSide: GatewaySide, targetSide: GatewaySide, sourceFolder: PositionedGraphNode, targetFolder: PositionedGraphNode): Point[][] {
+  if ((sourceSide === "left" || sourceSide === "right") && (targetSide === "left" || targetSide === "right")) {
+    const x = horizontalCorridorX(sourceFolder, targetFolder, sourceSide);
+    const upperY = Math.round(Math.min(sourceFolder.y, targetFolder.y) - GRID_LAYOUT_CONSTANTS.folderGap / 2);
+    const lowerY = Math.round(Math.max(sourceFolder.y + sourceFolder.height, targetFolder.y + targetFolder.height) + GRID_LAYOUT_CONSTANTS.folderGap / 2);
+    const preferredY = Math.abs(startPoint.y - upperY) + Math.abs(endPoint.y - upperY) <= Math.abs(startPoint.y - lowerY) + Math.abs(endPoint.y - lowerY) ? upperY : lowerY;
+    return [
+      [startPoint, { x, y: startPoint.y }, { x, y: endPoint.y }, endPoint],
+      [startPoint, { x, y: startPoint.y }, { x, y: preferredY }, { x: endPoint.x, y: preferredY }, endPoint],
+      [startPoint, { x, y: startPoint.y }, { x, y: upperY }, { x: endPoint.x, y: upperY }, endPoint],
+      [startPoint, { x, y: startPoint.y }, { x, y: lowerY }, { x: endPoint.x, y: lowerY }, endPoint]
+    ];
+  }
+
+  const y = verticalCorridorY(sourceFolder, targetFolder, sourceSide);
+  const leftX = Math.round(Math.min(sourceFolder.x, targetFolder.x) - GRID_LAYOUT_CONSTANTS.folderGap / 2);
+  const rightX = Math.round(Math.max(sourceFolder.x + sourceFolder.width, targetFolder.x + targetFolder.width) + GRID_LAYOUT_CONSTANTS.folderGap / 2);
+  const preferredX = Math.abs(startPoint.x - leftX) + Math.abs(endPoint.x - leftX) <= Math.abs(startPoint.x - rightX) + Math.abs(endPoint.x - rightX) ? leftX : rightX;
+  return [
+    [startPoint, { x: startPoint.x, y }, { x: endPoint.x, y }, endPoint],
+    [startPoint, { x: startPoint.x, y }, { x: preferredX, y }, { x: preferredX, y: endPoint.y }, endPoint],
+    [startPoint, { x: startPoint.x, y }, { x: leftX, y }, { x: leftX, y: endPoint.y }, endPoint],
+    [startPoint, { x: startPoint.x, y }, { x: rightX, y }, { x: rightX, y: endPoint.y }, endPoint]
+  ];
+}
+
+function outerRouteCandidates(startPoint: Point, endPoint: Point, sourceSide: GatewaySide, targetSide: GatewaySide, folders: PositionedGraphNode[]): Point[][] {
+  const margin = GRID_LAYOUT_CONSTANTS.folderGap / 2;
+  const minX = Math.min(...folders.map((folder) => folder.x));
+  const maxX = Math.max(...folders.map((folder) => folder.x + folder.width));
+  const minY = Math.min(...folders.map((folder) => folder.y));
+  const maxY = Math.max(...folders.map((folder) => folder.y + folder.height));
+  const leftX = Math.round(minX - margin);
+  const rightX = Math.round(maxX + margin);
+  const topY = Math.round(minY - margin);
+  const bottomY = Math.round(maxY + margin);
+
+  if (sourceSide === "left" || sourceSide === "right" || targetSide === "left" || targetSide === "right") {
+    return [
+      [startPoint, { x: sourceSide === "left" ? leftX : rightX, y: startPoint.y }, { x: sourceSide === "left" ? leftX : rightX, y: endPoint.y }, endPoint],
+      [startPoint, { x: sourceSide === "left" ? leftX : rightX, y: startPoint.y }, { x: sourceSide === "left" ? leftX : rightX, y: topY }, { x: endPoint.x, y: topY }, endPoint],
+      [startPoint, { x: sourceSide === "left" ? leftX : rightX, y: startPoint.y }, { x: sourceSide === "left" ? leftX : rightX, y: bottomY }, { x: endPoint.x, y: bottomY }, endPoint]
+    ];
+  }
+
+  return [
+    [startPoint, { x: startPoint.x, y: sourceSide === "top" ? topY : bottomY }, { x: endPoint.x, y: sourceSide === "top" ? topY : bottomY }, endPoint],
+    [startPoint, { x: startPoint.x, y: sourceSide === "top" ? topY : bottomY }, { x: leftX, y: sourceSide === "top" ? topY : bottomY }, { x: leftX, y: endPoint.y }, endPoint],
+    [startPoint, { x: startPoint.x, y: sourceSide === "top" ? topY : bottomY }, { x: rightX, y: sourceSide === "top" ? topY : bottomY }, { x: rightX, y: endPoint.y }, endPoint]
+  ];
+}
+
+function horizontalCorridorX(source: PositionedGraphNode, target: PositionedGraphNode, sourceSide: GatewaySide): number {
+  if (sourceSide === "right") {
+    return Math.round((source.x + source.width + target.x) / 2);
+  }
+  return Math.round((target.x + target.width + source.x) / 2);
+}
+
+function verticalCorridorY(source: PositionedGraphNode, target: PositionedGraphNode, sourceSide: GatewaySide): number {
+  if (sourceSide === "bottom") {
+    return Math.round((source.y + source.height + target.y) / 2);
+  }
+  return Math.round((target.y + target.height + source.y) / 2);
+}
+
+function countDiagonalSegments(points: Point[]): number {
+  let count = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    if (previous && current && previous.x !== current.x && previous.y !== current.y) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function isOrthogonalPath(points: Point[]): boolean {
+  return countDiagonalSegments(points) === 0;
+}
+
+function countTrunkFolderIntersections(points: Point[], folders: PositionedGraphNode[], endpointFolderIds: Set<string>): number {
+  const blockers = folders.filter((folder) => !endpointFolderIds.has(folder.id) && !isAncestorContainerOfEndpoint(folder, folders, endpointFolderIds));
+  return countPathRectIntersections(points, blockers);
+}
+
+function countPathRectIntersections(points: Point[], rects: PositionedGraphNode[]): number {
+  let intersections = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    if (!previous || !current) {
+      continue;
+    }
+    intersections += rects.filter((rect) => segmentIntersectsRect(previous, current, rect)).length;
+  }
+  return intersections;
+}
+
+function isAncestorContainerOfEndpoint(folder: PositionedGraphNode, folders: PositionedGraphNode[], endpointFolderIds: Set<string>): boolean {
+  return folders.some((candidate) => endpointFolderIds.has(candidate.id) && candidate.id !== folder.id && containsRect(folder, candidate));
+}
+
+function pointsToSections(points: Point[]): RoutedEdgeSection[] {
+  if (points.length < 2) {
+    return [];
+  }
+  const startPoint = points[0]!;
+  const endPoint = points[points.length - 1]!;
+  return [{ startPoint, bendPoints: points.slice(1, -1), endPoint }];
+}
+
+function bundleKey(providerFolderId: string, consumerFolderId: string): string {
+  return `${providerFolderId}->${consumerFolderId}`;
+}
+
+function compareBundles(a: FolderDependencyBundle, b: FolderDependencyBundle): number {
+  return a.providerFolderId.localeCompare(b.providerFolderId) || a.consumerFolderId.localeCompare(b.consumerFolderId);
+}
+
+function routeKindOrder(kind: RoadRouteKind): number {
+  switch (kind) {
+    case "trunk":
+      return 0;
+    case "collector":
+      return 1;
+    case "branch":
+      return 2;
+    case "direct":
+      return 3;
+  }
+}
+
+function unique<T>(values: T[]): T[] {
+  return [...new Set(values)];
+}
+
+function uniqueDefined<T>(values: (T | undefined)[]): T[] {
+  return unique(values.filter((value): value is T => value !== undefined));
 }
 
 function addVisualEdge(

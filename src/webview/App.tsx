@@ -201,7 +201,7 @@ export function App(): JSX.Element {
     }
     const renderedPairs = new Set<string>();
     for (const road of renderedRoads) {
-      const pair = `${road.level}:${road.sourceId}->${road.targetId}`;
+      const pair = `${road.providerFolderId ?? road.sourceId}->${road.consumerFolderId ?? road.targetId}:${road.routeKind}`;
       if (renderedPairs.has(pair)) {
         console.warn(`Codebase Town rendered duplicate road ${pair}.`);
       }
@@ -213,8 +213,12 @@ export function App(): JSX.Element {
         console.warn(`Codebase Town road ${road.id} is missing target bounds.`);
       }
     }
-    if (!showAllDependencies && !selection && !hoveredFileId && renderedRoads.some((road) => road.level === "file")) {
-      console.warn("Codebase Town initial road policy violation: file-level roads are visible before selection.");
+    if (renderedRoads.some((road) => road.level === "file" || road.routeKind !== "trunk")) {
+      console.warn("Codebase Town road policy violation: only folder trunks may be rendered.");
+    }
+    const debug = layout.roadDebug;
+    if (debug.duplicateBundleCount > 0 || debug.diagonalSegmentCount > 0 || debug.trunksIntersectingFolderBounds > 0 || debug.trunksIntersectingBuildingBounds > 0) {
+      console.warn("Codebase Town trunk debug counters are non-zero.", debug);
     }
   }, [layout, renderedRoads, showAllDependencies, selection, hoveredFileId]);
 
@@ -296,16 +300,9 @@ export function App(): JSX.Element {
                 />
               );
             })}
-            {foldersByDepth.map((folder) => (
-              <FolderLabelShape
-                key={`${folder.id}:label`}
-                node={folder}
-                folder={folderMap.get(folder.id)}
-              />
-            ))}
             {hasCompleteLayout && renderedRoads.map((road) => {
               const connection = connectionMap.get(road.connectionId);
-              const state = roadState(road.id, road.connectionId, road.sourceId, road.targetId, selection, connectedIds);
+              const state = roadState(road, selection, connectedIds);
               return (
                 <RoadShape
                   key={road.id}
@@ -317,6 +314,20 @@ export function App(): JSX.Element {
                 />
               );
             })}
+            {foldersByDepth.map((folder) => (
+              <FolderLabelShape
+                key={`${folder.id}:label`}
+                node={folder}
+                folder={folderMap.get(folder.id)}
+              />
+            ))}
+            {layout.files.map((fileNode) => (
+              <FileLabelShape
+                key={`${fileNode.id}:label`}
+                node={fileNode}
+                file={fileMap.get(fileNode.id)}
+              />
+            ))}
             {showLayoutDebug && <LayoutDebugOverlay layout={layout} />}
             {layout.files.map((fileNode) => {
               const file = fileMap.get(fileNode.id);
@@ -350,6 +361,7 @@ export function App(): JSX.Element {
         )}
         {layout && layout.layoutWarnings.length > 0 && <LayoutWarningOverlay warnings={layout.layoutWarnings} />}
         {layout && <MiniMap layout={layout} selectedId={selection?.id} />}
+        {layout && showLayoutDebug && <RoadDebugPanel debug={layout.roadDebug} />}
       </section>
 
       {showProjectHud ? (
@@ -570,7 +582,7 @@ function BottomToolbar(props: {
         Dependencies
       </button>
       <FilterToggle label="Type" value={props.filters.typeOnly} onChange={(typeOnly) => props.setFilters((current) => ({ ...current, typeOnly }))} />
-      <FilterToggle label="Show all dependencies" value={props.showAllDependencies} onChange={props.setShowAllDependencies} />
+      <FilterToggle label="Show all trunks" value={props.showAllDependencies} onChange={props.setShowAllDependencies} />
       <div className="direction-control" role="group" aria-label="Layout direction">
         <button type="button" className={props.layoutDirection === "RIGHT" ? "active" : ""} title="Left-to-right layout" onClick={() => props.setLayoutDirection("RIGHT")}>
           L-R
@@ -662,17 +674,20 @@ function RoadShape(props: {
   title: string;
   onClick(): void;
 }): JSX.Element {
-  const roadClass = `${props.connection?.type ?? "runtime"} ${props.connection?.isCircular ? "circular" : ""} ${props.road.isAggregated ? "aggregated" : ""} ${props.state}`;
+  const roadClass = `${props.road.routeKind} ${props.road.endpointRole ?? ""} ${props.connection?.type ?? props.road.dependencyTypes[0] ?? "runtime"} ${props.connection?.isCircular ? "circular" : ""} ${props.road.isAggregated ? "aggregated" : ""} ${props.state}`;
   const path = roadPathData(props.road);
-  const labelPoint = props.road.points[Math.floor(props.road.points.length / 2)];
+  const labelPoint = roadLabelPoint(props.road.points);
+  const countText = `${props.road.dependencyCount} ${props.road.dependencyCount === 1 ? "dependency" : "dependencies"}`;
+  const badgeWidth = Math.max(78, countText.length * 6.4 + 16);
   return (
     <g className={`road-group ${roadClass}`} onClick={props.onClick}>
       <path d={path} className="road road-base" />
       <path d={path} className="road road-lane" markerEnd="url(#arrow)" />
-      {props.road.isAggregated && props.road.dependencyCount > 1 && labelPoint && (
-        <text x={labelPoint.x} y={labelPoint.y - 8} className="road-count">
-          {props.road.dependencyCount} dependencies
-        </text>
+      {labelPoint && (
+        <g className="road-count" transform={`translate(${labelPoint.x}, ${labelPoint.y - 14})`}>
+          <rect x={-badgeWidth / 2} y={-11} width={badgeWidth} height={18} rx={7} />
+          <text y={2}>{countText}</text>
+        </g>
       )}
       <path d={path} className="road road-hit">
         <title>{props.title}</title>
@@ -681,12 +696,57 @@ function RoadShape(props: {
   );
 }
 
+function roadLabelPoint(points: Point[]): Point | undefined {
+  let best: { point: Point; length: number } | undefined;
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    if (!previous || !current) {
+      continue;
+    }
+    const length = Math.abs(current.x - previous.x) + Math.abs(current.y - previous.y);
+    if (!best || length > best.length) {
+      best = {
+        point: { x: Math.round((previous.x + current.x) / 2), y: Math.round((previous.y + current.y) / 2) },
+        length
+      };
+    }
+  }
+  return best?.point;
+}
+
 function LayoutWarningOverlay(props: { warnings: string[] }): JSX.Element {
   return (
     <div className="layout-warning" role="status">
       <strong>Layout fallback active</strong>
       <span>{props.warnings.slice(0, 2).join(" ")}</span>
     </div>
+  );
+}
+
+function RoadDebugPanel(props: { debug: TownLayout["roadDebug"] }): JSX.Element {
+  const items: [string, number][] = [
+    ["Semantic file dependencies", props.debug.semanticFileDependencyCount],
+    ["Generated folder bundles", props.debug.generatedFolderBundleCount],
+    ["Rendered trunks", props.debug.renderedTrunkCount],
+    ["Rejected trunks", props.debug.rejectedTrunkCount],
+    ["Duplicate bundles", props.debug.duplicateBundleCount],
+    ["Diagonal segments", props.debug.diagonalSegmentCount],
+    ["Trunks crossing folders", props.debug.trunksIntersectingFolderBounds],
+    ["Trunks crossing buildings", props.debug.trunksIntersectingBuildingBounds]
+  ];
+  return (
+    <aside className="road-debug-panel hud-card">
+      <h2>Road Debug</h2>
+      <dl>
+        {items.map(([label, value]) => (
+          <div key={label} className={value > 0 && /Duplicate|Diagonal|crossing/.test(label) ? "bad" : ""}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </aside>
   );
 }
 
@@ -750,6 +810,13 @@ function FileBuildingShape(props: {
       <rect x={props.node.x + 16} y={props.node.y + 10} width={props.node.width - 32} height={MAP_SIZES.buildingHeight} rx="10" />
       <path d={`M${props.node.x + 26},${props.node.y + 10} L${props.node.x + props.node.width / 2},${props.node.y + 2} L${props.node.x + props.node.width - 26},${props.node.y + 10}`} />
       <OptionalSvgImage href={buildingUrl} x={imageX} y={imageY} width={MAP_SIZES.buildingWidth} height={MAP_SIZES.buildingHeight} className="building-image" preserveAspectRatio="xMidYMid meet" />
+    </g>
+  );
+}
+
+function FileLabelShape(props: { node: LayoutNode; file: FileNode | undefined }): JSX.Element {
+  return (
+    <g className="file-label" pointerEvents="none">
       <text x={props.node.x + props.node.width / 2} y={props.node.y + 96} className="file-title">
         {props.node.label}
       </text>
@@ -869,10 +936,34 @@ function DetailsPanel(props: {
     );
   }
 
+  if (props.layoutRoad) {
+    const provider = entityLabel(props.layoutRoad.providerFolderId ?? props.layoutRoad.sourceId, props.fileMap, props.folderMap);
+    const consumer = entityLabel(props.layoutRoad.consumerFolderId ?? props.layoutRoad.targetId, props.fileMap, props.folderMap);
+    const representedDependencies = props.layoutRoad.dependencyCount;
+    const dependencyItems = props.layoutRoad.connectionIds
+      .map((id) => props.connectionMap.get(id))
+      .filter((connection): connection is ImportConnection => Boolean(connection))
+      .map((connection) => `${providerLabel(connection, props.fileMap)} -> ${consumerLabel(connection, props.fileMap)} (${connection.type}) ${symbolLabel(connection)}`);
+    return (
+      <div className="details">
+        <h2>{props.layoutRoad.routeKind === "trunk" ? "Dependency trunk" : "Dependency route"}</h2>
+        <p>{provider} -&gt; {consumer}</p>
+        <MetricList
+          items={[
+            ["Route", props.layoutRoad.routeKind],
+            ["Dependencies", String(representedDependencies)],
+            ["Symbols", String(props.layoutRoad.symbolCount)],
+            ["Types", props.layoutRoad.dependencyTypes.join(", ") || "runtime"]
+          ]}
+        />
+        <DetailList title="File dependencies" items={dependencyItems} />
+      </div>
+    );
+  }
+
   if (props.road) {
-    const provider = props.layoutRoad ? entityLabel(props.layoutRoad.sourceId, props.fileMap, props.folderMap) : providerLabel(props.road, props.fileMap);
-    const consumer = props.layoutRoad ? entityLabel(props.layoutRoad.targetId, props.fileMap, props.folderMap) : consumerLabel(props.road, props.fileMap);
-    const representedDependencies = props.layoutRoad?.dependencyCount ?? 1;
+    const provider = providerLabel(props.road, props.fileMap);
+    const consumer = consumerLabel(props.road, props.fileMap);
     return (
       <div className="details">
         <h2>Road</h2>
@@ -881,7 +972,7 @@ function DetailsPanel(props: {
           items={[
             ["Provider", provider],
             ["Consumer", consumer],
-            ["Dependencies", String(representedDependencies)],
+            ["Dependencies", "1"],
             ["Type", props.road.type],
             ["Specifier", props.road.moduleSpecifier],
             ["Resolved", props.road.isResolved ? "yes" : "no"],
@@ -1074,24 +1165,29 @@ function nodeState(id: string, selection: Selection | undefined, connectedIds: S
   return "normal";
 }
 
-function roadState(roadId: string, connectionId: string, sourceId: string, targetId: string, selection: Selection | undefined, connectedIds: Set<string>): string {
-  if (selection?.kind === "road" && selection.id === roadId) {
+function roadState(road: TownLayout["roads"][number], selection: Selection | undefined, connectedIds: Set<string>): string {
+  if (selection?.kind === "road" && (selection.id === road.id || selection.id === road.trunkId)) {
     return "selected";
   }
+  if (selection?.kind === "file" && road.participantFileIds.includes(selection.id)) {
+    return "connected";
+  }
+  if (selection?.kind === "folder" && (road.providerFolderId === selection.id || road.consumerFolderId === selection.id)) {
+    return "connected";
+  }
   if (selection && connectedIds.size > 0) {
-    return connectedIds.has(connectionId) || connectedIds.has(sourceId) || connectedIds.has(targetId) ? "connected" : "dimmed";
+    return connectedIds.has(road.connectionId) || connectedIds.has(road.sourceId) || connectedIds.has(road.targetId) ? "connected" : "dimmed";
   }
   return "normal";
 }
 
 function roadTitle(connection: ImportConnection | undefined, road: TownLayout["roads"][number], fileMap: Map<string, FileNode>, folderMap: Map<string, FolderNode>): string {
-  if (!connection) {
-    return "";
-  }
-  const provider = entityLabel(road.sourceId, fileMap, folderMap);
-  const consumer = entityLabel(road.targetId, fileMap, folderMap);
+  const provider = entityLabel(road.providerFolderId ?? road.sourceId, fileMap, folderMap);
+  const consumer = entityLabel(road.consumerFolderId ?? road.targetId, fileMap, folderMap);
   const count = road.dependencyCount > 1 ? ` (${road.dependencyCount} imports)` : "";
-  return `${provider} -> ${consumer}${count} ${symbolLabel(connection)}`;
+  const types = road.dependencyTypes.length > 0 ? ` ${road.dependencyTypes.join(", ")}` : "";
+  const symbols = road.symbolCount > 0 ? ` ${road.symbolCount} symbols` : "";
+  return `${provider} -> ${consumer}${count}${symbols}${types}${connection ? ` ${symbolLabel(connection)}` : ""}`;
 }
 
 function providerLabel(connection: ImportConnection, fileMap: Map<string, FileNode>): string {

@@ -618,32 +618,39 @@ h3 {
 }
 
 .road-base {
-  stroke: rgba(88, 91, 84, 0.9);
-  stroke-width: 22;
-  opacity: 0.78;
+  stroke: rgba(68, 73, 68, 0.82);
+  stroke-width: 7;
+  opacity: 0.44;
 }
 
 .road-lane {
-  stroke: rgba(255, 255, 255, 0.86);
-  stroke-width: 2;
-  stroke-dasharray: 12 13;
-  opacity: 0.78;
+  stroke: rgba(255, 255, 255, 0.68);
+  stroke-width: 1.4;
+  stroke-dasharray: 9 14;
+  opacity: 0.58;
   pointer-events: none;
 }
 
 .road-hit {
   stroke: transparent;
-  stroke-width: 28;
+  stroke-width: 18;
 }
 
-.road-count {
+.road-group.trunk .road-hit {
+  stroke-width: 20;
+}
+
+.road-count rect {
+  fill: rgba(17, 23, 22, 0.86);
+  stroke: rgba(255, 255, 255, 0.18);
+  stroke-width: 1;
+}
+
+.road-count text {
   fill: rgba(255, 255, 255, 0.9);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   text-anchor: middle;
-  paint-order: stroke;
-  stroke: rgba(0, 0, 0, 0.72);
-  stroke-width: 4px;
   pointer-events: none;
 }
 
@@ -675,7 +682,7 @@ h3 {
 }
 
 .arrow-marker {
-  fill: rgba(255, 255, 255, 0.88);
+  fill: rgba(255, 255, 255, 0.76);
 }
 
 .warning-badge {
@@ -706,6 +713,46 @@ h3 {
   paint-order: stroke;
   stroke: rgba(0, 0, 0, 0.86);
   stroke-width: 3px;
+}
+
+.road-debug-panel {
+  position: absolute;
+  right: 20px;
+  bottom: 84px;
+  z-index: 6;
+  width: 280px;
+  padding: 14px;
+  font-size: 12px;
+}
+
+.road-debug-panel h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+
+.road-debug-panel dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.road-debug-panel div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.road-debug-panel dt {
+  color: rgba(245, 247, 244, 0.7);
+}
+
+.road-debug-panel dd {
+  margin: 0;
+  font-weight: 800;
+}
+
+.road-debug-panel .bad dd {
+  color: #ff6565;
 }
 
 .agent-marker {

@@ -12,39 +12,36 @@ export interface RoadVisibilityOptions {
 }
 
 export function visibleRoadsForState(roads: LayoutRoad[], graph: ProjectGraph | undefined, options: RoadVisibilityOptions): LayoutRoad[] {
-  const uniqueRoads = dedupeRoads(roads);
+  const uniqueRoads = dedupeRoads(roads.filter((road) => road.routeKind === "trunk" && road.level === "folder"));
 
-  const selectedFileId = options.selection?.kind === "file" ? options.selection.id : undefined;
   const focusedFolderId = options.selection?.kind === "folder" ? options.selection.id : undefined;
-  const showFileRoads = Boolean(selectedFileId || options.showAllDependencies);
+  const selectedRoad = options.selection?.kind === "road" ? uniqueRoads.find((road) => road.id === options.selection?.id) : undefined;
+  const selectedTrunkId = selectedRoad?.trunkId ?? selectedRoad?.id;
+
+  void graph;
+
+  if (options.showAllDependencies) {
+    return uniqueRoads;
+  }
 
   return uniqueRoads.filter((road) => {
-    if (road.level === "folder") {
-      if (selectedFileId && graph) {
-        const activeFolderId = folderIdForFile(selectedFileId, graph);
-        return Boolean(activeFolderId) && (road.sourceId === activeFolderId || road.targetId === activeFolderId);
-      }
-      return !focusedFolderId || road.sourceId === focusedFolderId || road.targetId === focusedFolderId;
+    if (selectedTrunkId) {
+      return road.id === selectedTrunkId;
     }
-
-    if (!showFileRoads) {
-      return false;
+    if (focusedFolderId) {
+      return road.providerFolderId === focusedFolderId || road.consumerFolderId === focusedFolderId;
     }
-    return options.showAllDependencies || road.sourceId === selectedFileId || road.targetId === selectedFileId;
+    return true;
   });
 }
 
 function dedupeRoads(roads: LayoutRoad[]): LayoutRoad[] {
   const byPair = new Map<string, LayoutRoad>();
   for (const road of roads) {
-    const key = `${road.level}:${road.sourceId}->${road.targetId}`;
+    const key = `${road.providerFolderId ?? road.sourceId}->${road.consumerFolderId ?? road.targetId}:${road.routeKind}`;
     if (!byPair.has(key)) {
       byPair.set(key, road);
     }
   }
   return [...byPair.values()];
-}
-
-function folderIdForFile(fileId: string, graph: ProjectGraph): string | undefined {
-  return graph.files.find((candidate) => candidate.id === fileId)?.folderId;
 }

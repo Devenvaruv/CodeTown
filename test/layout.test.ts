@@ -159,18 +159,14 @@ describe("bounded grid layout", () => {
     expect(visibleRoads.some((road) => road.level === "file")).toBe(false);
   });
 
-  it("reveals only direct file roads for a selected file", async () => {
+  it("does not reveal file roads for a selected file", async () => {
     const graph = providerConsumerGraph();
     const layout = await buildTownLayout(graph, new Set(graph.folders.map((folder) => folder.id)));
     const visibleRoads = visibleRoadsForState(layout.roads, graph, { selection: { kind: "file", id: "src/user.service.ts" } });
     const fileRoads = visibleRoads.filter((road) => road.level === "file");
 
-    expect(fileRoads).toEqual([
-      expect.objectContaining({
-        sourceId: "src/types.ts",
-        targetId: "src/user.service.ts"
-      })
-    ]);
+    expect(fileRoads).toEqual([]);
+    expect(visibleRoads.every((road) => road.routeKind === "trunk")).toBe(true);
   });
 
   it("does not reveal file roads for a hovered file", async () => {
@@ -181,23 +177,143 @@ describe("bounded grid layout", () => {
     expect(visibleRoads.filter((road) => road.level === "file")).toHaveLength(0);
   });
 
-  it("does not reveal file roads for a focused folder", async () => {
+  it("highlights only trunks for a focused folder", async () => {
     const graph = providerConsumerGraph();
     const layout = await buildTownLayout(graph, new Set(graph.folders.map((folder) => folder.id)));
-    const visibleRoads = visibleRoadsForState(layout.roads, graph, { selection: { kind: "folder", id: "src" } });
+    const visibleRoads = visibleRoadsForState(layout.roads, graph, { selection: { kind: "folder", id: "src/lib" } });
 
-    expect(visibleRoads.some((road) => road.level === "file")).toBe(false);
-    expect(visibleRoads.every((road) => road.level === "folder")).toBe(true);
+    expect(visibleRoads.some((road) => road.routeKind === "trunk")).toBe(true);
+    expect(visibleRoads.every((road) => road.routeKind === "trunk" && road.level === "folder")).toBe(true);
   });
 
-  it("can explicitly show all bundled dependencies", async () => {
+  it("can explicitly show all folder trunks", async () => {
     const graph = providerConsumerGraph();
     const layout = await buildTownLayout(graph, new Set(graph.folders.map((folder) => folder.id)));
     const visibleRoads = visibleRoadsForState(layout.roads, graph, { showAllDependencies: true });
 
     expect(visibleRoads).toHaveLength(layout.roads.length);
-    expect(visibleRoads.some((road) => road.level === "file")).toBe(true);
-    expect(visibleRoads.some((road) => road.level === "folder")).toBe(true);
+    expect(visibleRoads.some((road) => road.level === "file")).toBe(false);
+    expect(visibleRoads.every((road) => road.level === "folder" && road.routeKind === "trunk")).toBe(true);
+  });
+
+  it("bundles multiple cross-folder file dependencies into one directional trunk", async () => {
+    const graph = acceptanceGraph();
+    const layout = await buildTownLayout(graph, new Set(graph.folders.map((folder) => folder.id)));
+    const trunks = layout.roads.filter((road) => road.routeKind === "trunk" && road.providerFolderId === "frontend" && road.consumerFolderId === "backend");
+
+    expect(trunks).toHaveLength(1);
+    expect(trunks[0]).toEqual(expect.objectContaining({
+      sourceId: "frontend",
+      targetId: "backend",
+      dependencyCount: 3,
+      symbolCount: 3
+    }));
+  });
+
+  it("creates separate trunks for opposite folder directions", async () => {
+    const graph = bidirectionalGraph();
+    const layout = await buildTownLayout(graph, new Set(graph.folders.map((folder) => folder.id)));
+    const trunks = layout.roads.filter((road) => road.routeKind === "trunk");
+
+    expect(trunks.some((road) => road.providerFolderId === "frontend" && road.consumerFolderId === "backend")).toBe(true);
+    expect(trunks.some((road) => road.providerFolderId === "backend" && road.consumerFolderId === "frontend")).toBe(true);
+    expect(new Set(trunks.map((road) => road.id)).size).toBe(trunks.length);
+  });
+
+  it("renders at most one overview trunk per ordered folder pair", async () => {
+    const graph = acceptanceGraph();
+    const layout = await buildTownLayout(graph, new Set(graph.folders.map((folder) => folder.id)));
+    const pairKeys = layout.roads.map((road) => `${road.providerFolderId}->${road.consumerFolderId}:${road.routeKind}`);
+
+    expect(new Set(pairKeys).size).toBe(pairKeys.length);
+    expect(layout.roadDebug.duplicateBundleCount).toBe(0);
+  });
+
+  it("selects folder gateway sides from relative folder positions", async () => {
+    const graph = acceptanceGraph();
+    const layout = await buildTownLayout(graph, new Set(graph.folders.map((folder) => folder.id)));
+    const trunk = layout.roads.find((road) => road.routeKind === "trunk" && road.providerFolderId === "frontend" && road.consumerFolderId === "backend")!;
+    const provider = node(layout.folders, "frontend");
+    const consumer = node(layout.folders, "backend");
+    const dx = centerX(consumer) - centerX(provider);
+    const dy = centerY(consumer) - centerY(provider);
+
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      expect(trunk.sourceGateway?.side).toBe(dx >= 0 ? "right" : "left");
+      expect(trunk.targetGateway?.side).toBe(dx >= 0 ? "left" : "right");
+    } else {
+      expect(trunk.sourceGateway?.side).toBe(dy >= 0 ? "bottom" : "top");
+      expect(trunk.targetGateway?.side).toBe(dy >= 0 ? "top" : "bottom");
+    }
+  });
+
+  it("attaches trunks only to folder gateways", async () => {
+    const graph = acceptanceGraph();
+    const layout = await buildTownLayout(graph, new Set(graph.folders.map((folder) => folder.id)));
+
+    for (const trunk of layout.roads) {
+      const provider = node(layout.folders, trunk.providerFolderId!);
+      const consumer = node(layout.folders, trunk.consumerFolderId!);
+
+      expect(pointOnFolderBoundary(trunk.points[0]!, provider)).toBe(true);
+      expect(pointOnFolderBoundary(trunk.points.at(-1)!, consumer)).toBe(true);
+      expect(trunk.sourceGateway?.folderId).toBe(provider.id);
+      expect(trunk.targetGateway?.folderId).toBe(consumer.id);
+    }
+  });
+
+  it("does not create local branches or collectors yet", async () => {
+    const graph = acceptanceGraph();
+    const layout = await buildTownLayout(graph, new Set(graph.folders.map((folder) => folder.id)));
+
+    expect(layout.roads.some((road) => road.routeKind === "branch" || road.routeKind === "collector" || road.routeKind === "direct")).toBe(false);
+    expect(layout.roads.every((road) => road.routeKind === "trunk" && road.level === "folder")).toBe(true);
+  });
+
+  it("keeps folder trunks out of unrelated folder interiors", async () => {
+    const graph = threeTownGraph();
+    const layout = await buildTownLayout(graph, new Set(graph.folders.map((folder) => folder.id)));
+    const trunks = layout.roads.filter((road) => road.routeKind === "trunk");
+
+    for (const trunk of trunks) {
+      const unrelatedFolders = layout.folders.filter((folder) => folder.id !== trunk.providerFolderId && folder.id !== trunk.consumerFolderId);
+      for (const folder of unrelatedFolders) {
+        expect(pathIntersectsRect(trunk.points, folder)).toBe(false);
+      }
+    }
+  });
+
+  it("rejects diagonal trunk segments", async () => {
+    const graph = threeTownGraph();
+    const layout = await buildTownLayout(graph, new Set(graph.folders.map((folder) => folder.id)));
+
+    expect(layout.roads.flatMap((road) => diagonalSegments(road.points))).toEqual([]);
+    expect(layout.roadDebug.diagonalSegmentCount).toBe(0);
+  });
+
+  it("reports zero blocking intersections for accepted trunks", async () => {
+    const graph = threeTownGraph();
+    const layout = await buildTownLayout(graph, new Set(graph.folders.map((folder) => folder.id)));
+
+    expect(layout.roadDebug.trunksIntersectingFolderBounds).toBe(0);
+    expect(layout.roadDebug.trunksIntersectingBuildingBounds).toBe(0);
+  });
+
+  it("hides file branches and collectors in overview mode", async () => {
+    const graph = acceptanceGraph();
+    const layout = await buildTownLayout(graph, new Set(graph.folders.map((folder) => folder.id)));
+    const visibleRoads = visibleRoadsForState(layout.roads, graph, {});
+
+    expect(visibleRoads.every((road) => road.routeKind === "trunk")).toBe(true);
+  });
+
+  it("selecting a file keeps the view trunk-only", async () => {
+    const graph = acceptanceGraph();
+    const layout = await buildTownLayout(graph, new Set(graph.folders.map((folder) => folder.id)));
+    const visibleRoads = visibleRoadsForState(layout.roads, graph, { selection: { kind: "file", id: "frontend/ts.ts" } });
+
+    expect(visibleRoads.some((road) => road.routeKind === "trunk" && road.providerFolderId === "frontend" && road.consumerFolderId === "backend")).toBe(true);
+    expect(visibleRoads.every((road) => road.routeKind === "trunk" && road.level === "folder")).toBe(true);
   });
 
   it("places nodes with missing parent information at the root level", async () => {
@@ -281,6 +397,57 @@ function expectNoOverlaps(nodes: LayoutNode[]): void {
   }
 }
 
+function centerX(node: LayoutNode): number {
+  return node.x + node.width / 2;
+}
+
+function centerY(node: LayoutNode): number {
+  return node.y + node.height / 2;
+}
+
+function pathIntersectsRect(points: { x: number; y: number }[], rect: LayoutNode): boolean {
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1]!;
+    const current = points[index]!;
+    if (segmentIntersectsRect(previous, current, rect)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function pointOnFolderBoundary(point: { x: number; y: number }, folder: LayoutNode): boolean {
+  const onVerticalSide = (point.x === folder.x || point.x === folder.x + folder.width) && point.y >= folder.y && point.y <= folder.y + folder.height;
+  const onHorizontalSide = (point.y === folder.y || point.y === folder.y + folder.height) && point.x >= folder.x && point.x <= folder.x + folder.width;
+  return onVerticalSide || onHorizontalSide;
+}
+
+function diagonalSegments(points: { x: number; y: number }[]): { start: { x: number; y: number }; end: { x: number; y: number } }[] {
+  const diagonals: { start: { x: number; y: number }; end: { x: number; y: number } }[] = [];
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1]!;
+    const current = points[index]!;
+    if (previous.x !== current.x && previous.y !== current.y) {
+      diagonals.push({ start: previous, end: current });
+    }
+  }
+  return diagonals;
+}
+
+function segmentIntersectsRect(start: { x: number; y: number }, end: { x: number; y: number }, rect: LayoutNode): boolean {
+  if (start.x === end.x) {
+    const y1 = Math.min(start.y, end.y);
+    const y2 = Math.max(start.y, end.y);
+    return start.x > rect.x && start.x < rect.x + rect.width && y2 > rect.y && y1 < rect.y + rect.height;
+  }
+  if (start.y === end.y) {
+    const x1 = Math.min(start.x, end.x);
+    const x2 = Math.max(start.x, end.x);
+    return start.y > rect.y && start.y < rect.y + rect.height && x2 > rect.x && x1 < rect.x + rect.width;
+  }
+  return false;
+}
+
 function collapsedGraph(): ProjectGraph {
   const folders = [
     folder(".", undefined, ["src"], [], 0),
@@ -349,6 +516,51 @@ function providerConsumerGraph(): ProjectGraph {
   ]);
 }
 
+function acceptanceGraph(): ProjectGraph {
+  const folders = [
+    folder(".", undefined, ["frontend", "backend"], [], 0),
+    folder("frontend", ".", [], ["frontend/ts.ts", "frontend/component.ts"], 1),
+    folder("backend", ".", [], ["backend/need_ts.ts", "backend/service.ts"], 1)
+  ];
+  const graphFiles = [
+    file("frontend/ts.ts", "frontend", "utility"),
+    file("frontend/component.ts", "frontend", "component"),
+    file("backend/need_ts.ts", "backend", "service"),
+    file("backend/service.ts", "backend", "service")
+  ];
+  return projectGraph("acceptance", folders, graphFiles, [
+    connection("user", "backend/need_ts.ts", "frontend/ts.ts", "User"),
+    connection("role", "backend/service.ts", "frontend/ts.ts", "Role"),
+    connection("props", "backend/service.ts", "frontend/component.ts", "ComponentProps")
+  ]);
+}
+
+function bidirectionalGraph(): ProjectGraph {
+  const base = acceptanceGraph();
+  return {
+    ...base,
+    project: { ...base.project, connectionCount: base.connections.length + 1 },
+    connections: [...base.connections, connection("backend-contract", "frontend/component.ts", "backend/service.ts", "ServiceContract")]
+  };
+}
+
+function threeTownGraph(): ProjectGraph {
+  const folders = [
+    folder(".", undefined, ["alpha", "beta", "gamma"], [], 0),
+    folder("alpha", ".", [], ["alpha/provider.ts"], 1),
+    folder("beta", ".", [], ["beta/unused.ts"], 1),
+    folder("gamma", ".", [], ["gamma/consumer.ts"], 1)
+  ];
+  const graphFiles = [
+    file("alpha/provider.ts", "alpha", "utility"),
+    file("beta/unused.ts", "beta", "utility"),
+    file("gamma/consumer.ts", "gamma", "service")
+  ];
+  return projectGraph("three", folders, graphFiles, [
+    connection("alpha-gamma", "gamma/consumer.ts", "alpha/provider.ts", "Thing")
+  ]);
+}
+
 function projectGraph(id: string, folders: FolderNode[], files: FileNode[], connections: ImportConnection[]): ProjectGraph {
   return {
     project: {
@@ -410,13 +622,13 @@ function file(id: string, folderId: string, kind: FileKind = "service"): FileNod
   };
 }
 
-function connection(id: string, sourceFileId: string, targetFileId: string): ImportConnection {
+function connection(id: string, sourceFileId: string, targetFileId: string, importedName = "default"): ImportConnection {
   return {
     id,
     sourceFileId,
     targetFileId,
     moduleSpecifier: targetFileId,
-    symbols: [],
+    symbols: [{ importedName, localName: importedName, isDefault: importedName === "default", isNamespace: false, isTypeOnly: false }],
     type: "runtime",
     isResolved: true,
     isCircular: false

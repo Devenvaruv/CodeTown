@@ -22,9 +22,11 @@ function createRoad(): LayoutRoad {
   return {
     id: "src/a.ts::src/b.ts::runtime::1::0::b:b",
     connectionId: "src/a.ts::src/b.ts::runtime::1::0::b:b",
+    connectionIds: ["src/a.ts::src/b.ts::runtime::1::0::b:b"],
     sourceId: "src/a.ts",
     targetId: "src/b.ts",
     level: "file",
+    routeKind: "direct",
     points: [
       { x: 10, y: 20 },
       { x: 40, y: 20 },
@@ -42,6 +44,9 @@ function createRoad(): LayoutRoad {
       }
     ],
     isAggregated: false,
-    dependencyCount: 1
+    dependencyCount: 1,
+    participantFileIds: ["src/a.ts", "src/b.ts"],
+    symbolCount: 1,
+    dependencyTypes: ["runtime"]
   };
 }
