@@ -6,6 +6,7 @@ import type { FileNode, FolderNode, ImportConnection, ProjectGraph } from "../sh
 import type { ExtensionToWebviewMessage } from "../shared/messageTypes";
 import { isExtensionToWebviewMessage } from "../shared/messageTypes";
 import { MAP_SIZES, assetUrl, buildingAssetForFileKind, mapAssets, type OverlayAssetKind } from "./assets/mapAssets";
+import { generateDecorScatter, type DecorScatterItem } from "./renderer/decorScatter";
 import { roadPathData } from "./renderer/roadGeometry";
 import { ENABLE_AGENT_ACTIVITY_DEMO, type AgentActivityState } from "./state/agentActivity";
 import { fileOverlayStates } from "./state/overlays";
@@ -184,6 +185,7 @@ export function App(): JSX.Element {
   );
   const foldersByDepth = useMemo(() => [...(layout?.folders ?? [])].sort((a, b) => (folderMap.get(a.id)?.depth ?? 0) - (folderMap.get(b.id)?.depth ?? 0) || a.id.localeCompare(b.id)), [layout, folderMap]);
   const hasCompleteLayout = useMemo(() => Boolean(layout && layout.layoutWarnings.length === 0 && layout.files.every(hasValidBounds) && layout.folders.every(hasValidBounds)), [layout]);
+  const decorItems = useMemo(() => (layout && hasCompleteLayout ? generateDecorScatter(layout) : []), [layout, hasCompleteLayout]);
   const selectedFile = selection?.kind === "file" ? fileMap.get(selection.id) : undefined;
   const selectedLayoutRoad = selection?.kind === "road" ? layout?.roads.find((road) => road.id === selection.id) : undefined;
   const selectedRoad = selectedLayoutRoad ? connectionMap.get(selectedLayoutRoad.connectionId) : undefined;
@@ -330,6 +332,7 @@ export function App(): JSX.Element {
                 onClick={() => setSelection({ kind: "folder", id: folder.id })}
               />
             ))}
+            {hasCompleteLayout && <DecorLayer items={decorItems} />}
             {hasCompleteLayout && renderedRoads.map((road) => {
               const connection = connectionMap.get(road.connectionId);
               const state = roadState(road, selection, connectedIds);
@@ -405,14 +408,15 @@ export function App(): JSX.Element {
           <div className="empty-state">{status}</div>
         )}
         {layout && layout.layoutWarnings.length > 0 && <LayoutWarningOverlay warnings={layout.layoutWarnings} />}
-        {layout && showMiniMap && <MiniMap layout={layout} selectedId={selection?.id} onClose={() => setShowMiniMap(false)} />}
-        {layout && !showMiniMap && (
-          <button type="button" className="hud-reopen mini-map-reopen" onClick={() => setShowMiniMap(true)}>
-            Map
-          </button>
-        )}
         {layout && showStreetDebug && <RoadDebugPanel debug={layout.roadDebug} />}
       </section>
+
+      {layout && showMiniMap && <MiniMap layout={layout} selectedId={selection?.id} onClose={() => setShowMiniMap(false)} />}
+      {layout && !showMiniMap && (
+        <button type="button" className="hud-reopen mini-map-reopen" onClick={() => setShowMiniMap(true)}>
+          Map
+        </button>
+      )}
 
       {showProjectHud ? (
         <aside className="sidebar hud-card project-card">
@@ -705,8 +709,8 @@ const FOLDER_BORDER = {
 } as const;
 
 const FOLDER_BORDER_CROPS = {
-  corner: { x: 440, y: 171, width: 200, height: 200 },
-  side: { x: 520, y: 460, width: 480, height: 83 },
+  corner: { x: 440, y: 171, width: 658, height: 587 },
+  side: { x: 120, y: 460, width: 1296, height: 83 },
   support: { x: 485, y: 371, width: 567, height: 202 }
 } as const;
 
@@ -722,23 +726,23 @@ function FolderBorderShape(props: { node: LayoutNode }): JSX.Element {
   const y = props.node.y;
   const width = props.node.width;
   const height = props.node.height;
-  const horizontalRailLength = Math.max(0, width - corner);
-  const verticalRailLength = Math.max(0, height - corner);
+  const horizontalRailLength = Math.max(0, width - corner * 2);
+  const verticalRailLength = Math.max(0, height - corner * 2);
   const topY = y - rail / 2;
   const bottomY = y + height - rail / 2;
   const leftX = x - rail / 2;
   const rightX = x + width - rail / 2;
-  const topSupportCenters = folderBorderSupportCenters(x + corner / 2, x + width - corner / 2, supportW);
-  const verticalSupportCenters = folderBorderSupportCenters(y + corner / 2, y + height - corner / 2, supportW);
+  const topSupportCenters = folderBorderSupportCenters(x + corner, x + width - corner, supportW);
+  const verticalSupportCenters = folderBorderSupportCenters(y + corner, y + height - corner, supportW);
 
   return (
     <g className="folder-border" pointerEvents="none">
       {sideUrl && (
         <>
-          <FolderBorderPiece href={sideUrl} crop={FOLDER_BORDER_CROPS.side} x={x + corner / 2} y={topY} width={horizontalRailLength} height={rail} className="folder-side-image" preserveAspectRatio="none" />
-          <FolderBorderPiece href={sideUrl} crop={FOLDER_BORDER_CROPS.side} x={x + corner / 2} y={bottomY} width={horizontalRailLength} height={rail} rotation={180} className="folder-side-image" preserveAspectRatio="none" />
-          <FolderBorderPiece href={sideUrl} crop={FOLDER_BORDER_CROPS.side} x={leftX} y={y + corner / 2} width={rail} height={verticalRailLength} rotation={270} className="folder-side-image" preserveAspectRatio="none" />
-          <FolderBorderPiece href={sideUrl} crop={FOLDER_BORDER_CROPS.side} x={rightX} y={y + corner / 2} width={rail} height={verticalRailLength} rotation={90} className="folder-side-image" preserveAspectRatio="none" />
+          <FolderBorderPiece href={sideUrl} crop={FOLDER_BORDER_CROPS.side} x={x + corner} y={topY} width={horizontalRailLength} height={rail} className="folder-side-image" preserveAspectRatio="none" />
+          <FolderBorderPiece href={sideUrl} crop={FOLDER_BORDER_CROPS.side} x={x + corner} y={bottomY} width={horizontalRailLength} height={rail} rotation={180} className="folder-side-image" preserveAspectRatio="none" />
+          <FolderBorderPiece href={sideUrl} crop={FOLDER_BORDER_CROPS.side} x={leftX} y={y + corner} width={rail} height={verticalRailLength} rotation={270} className="folder-side-image" preserveAspectRatio="none" />
+          <FolderBorderPiece href={sideUrl} crop={FOLDER_BORDER_CROPS.side} x={rightX} y={y + corner} width={rail} height={verticalRailLength} rotation={90} className="folder-side-image" preserveAspectRatio="none" />
         </>
       )}
       {supportUrl && (
@@ -1101,6 +1105,57 @@ function positionsFromLayout(layout: TownLayout): Map<string, Point> {
 
 function hasValidBounds(node: LayoutNode): boolean {
   return Number.isFinite(node.x) && Number.isFinite(node.y) && Number.isFinite(node.width) && Number.isFinite(node.height) && node.width > 0 && node.height > 0;
+}
+
+function DecorLayer(props: { items: DecorScatterItem[] }): JSX.Element {
+  return (
+    <g className="decor-layer" pointerEvents="none">
+      {props.items.map((item) => (
+        <DecorItemShape key={item.id} item={item} />
+      ))}
+    </g>
+  );
+}
+
+function DecorItemShape(props: { item: DecorScatterItem }): JSX.Element | null {
+  const decorUrl = assetUrl(mapAssets.decor[props.item.kind]);
+  const shadowUrl = assetUrl(mapAssets.decor.groundShadowBlob);
+  const centerX = props.item.x + props.item.width / 2;
+  const centerY = props.item.y + props.item.height / 2;
+  const transform = props.item.rotation ? `rotate(${props.item.rotation} ${centerX} ${centerY})` : undefined;
+
+  if (!decorUrl) {
+    return null;
+  }
+
+  return (
+    <g className={`decor-item ${props.item.tier}`}>
+      {props.item.hasShadow && shadowUrl && (
+        <image
+          href={shadowUrl}
+          x={props.item.x + props.item.width * 0.08}
+          y={props.item.y + props.item.height * 0.72}
+          width={props.item.width * 0.84}
+          height={Math.max(12, props.item.height * 0.22)}
+          className="decor-shadow-image"
+          preserveAspectRatio="xMidYMid meet"
+        />
+      )}
+      <image
+        href={decorUrl}
+        x={props.item.x}
+        y={props.item.y}
+        width={props.item.width}
+        height={props.item.height}
+        className={`decor-image ${props.item.kind}`}
+        preserveAspectRatio="xMidYMid meet"
+        transform={transform}
+        onError={(event) => {
+          event.currentTarget.style.display = "none";
+        }}
+      />
+    </g>
+  );
 }
 
 function isLayoutDebugModeEnabled(): boolean {

@@ -5,8 +5,22 @@ describe("map asset registry", () => {
   it("contains all required semantic asset groups", () => {
     expect(Object.keys(mapAssets.buildings).sort()).toEqual(["component", "controller", "entry", "generic", "index", "repository", "service", "test", "utility"]);
     expect(Object.keys(mapAssets.folders).sort()).toEqual(["corner", "side", "sign", "support"]);
+    expect(Object.keys(mapAssets.decor).sort()).toEqual([
+      "groundDirtPatch",
+      "groundGrassPatchSoft",
+      "groundGrassPatchTall",
+      "groundMossPatch",
+      "groundRockCluster",
+      "groundShadowBlob",
+      "natureBushCluster",
+      "natureFallenLog",
+      "natureFlowerPatch",
+      "natureMushroomCluster",
+      "natureTreeBroadleaf",
+      "natureTreePine"
+    ]);
     expect(Object.keys(mapAssets.overlays).sort()).toEqual(["circularDependency", "created", "editPulse", "edited", "error", "readPulse", "selected"]);
-    expect(flattenAssetDefinitions().length).toBe(26);
+    expect(flattenAssetDefinitions().length).toBe(38);
   });
 
   it("falls back specialized buildings to the generic asset definition", () => {

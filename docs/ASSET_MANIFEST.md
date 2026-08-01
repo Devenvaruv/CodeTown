@@ -33,6 +33,18 @@ The prompt mentioned `green.png`, but the provided repeating grass background is
 | `folder_side.png` | Stretchable folder border side rail | 1536x1024 | PNG | Yes | `FolderShape` composed border side rails | Yes | Cropped to artwork bounds. Only this rail is stretched; vertical sides rotate the horizontal rail. |
 | `folder_support.png` | Fixed folder border support | 1536x1024 | PNG | Yes | `FolderShape` composed border supports | Yes | Cropped to artwork bounds, rendered fixed-size, rotated for vertical/bottom sides, and distributed evenly along each side. |
 | `Blank Folder Sign.png` | Blank folder sign | 1024x1024 | PNG | Yes | `FolderShape` sign under dynamic label text | No | Folder names remain real SVG text. |
+| `ground_rock_cluster.png` | Medium ground decor | 1024x1024 | PNG | Yes | `DecorLayer` weighted scatter | No | Placed after large decor into empty ground, avoiding roads, buildings, labels, and folder borders. |
+| `ground_moss_patch.png` | Small ground decor | 1024x1024 | PNG | Yes | `DecorLayer` weighted scatter | No | Uses slight scale and rotation variation. |
+| `ground_grass_patch_tall.png` | Small ground decor | 1024x1024 | PNG | Yes | `DecorLayer` weighted scatter | No | Uses slight scale and rotation variation. |
+| `ground_grass_patch_soft.png` | Small ground decor | 1024x1024 | PNG | Yes | `DecorLayer` weighted scatter | No | Weighted as the most common small ground patch. |
+| `ground_dirt_patch.png` | Small ground variation | 1024x1024 | PNG | Yes | `DecorLayer` weighted scatter | No | Uses broad rotation variation. |
+| `ground_shadow_blob.png` | Soft shadow under larger decor | 1024x1024 | PNG | Yes | `DecorLayer` large-object shadow | No | Rendered underneath trees and fallen logs. |
+| `nature_flower_patch.png` | Small nature decor | 1024x1024 | PNG | Yes | `DecorLayer` weighted scatter | No | Placed after large and medium decor. |
+| `nature_fallen_log.png` | Large nature decor | 1024x1024 | PNG | Yes | `DecorLayer` weighted scatter | No | Placed before medium and small decor and gets a shadow blob. |
+| `nature_bush_cluster.png` | Medium nature decor | 1024x1024 | PNG | Yes | `DecorLayer` weighted scatter | No | Placed after large decor. |
+| `nature_tree_broadleaf.png` | Large nature decor | 1024x1024 | PNG | Yes | `DecorLayer` weighted scatter | No | Placed before medium and small decor and gets a shadow blob. |
+| `nature_tree_pine.png` | Large nature decor | 1024x1024 | PNG | Yes | `DecorLayer` weighted scatter | No | Placed before medium and small decor and gets a shadow blob. |
+| `nature_mushroom_cluster.png` | Small nature decor | 1024x1024 | PNG | Yes | `DecorLayer` weighted scatter | No | Lower weighted small accent. |
 | `Selected Building Overlay.png` | Selected-building overlay | 1536x1024 | PNG | Yes | `FileShape` selected overlay | No | Composited above building; CSS selected stroke also remains. |
 | `Recently Edited Overlay.png` | Recently edited overlay | 1024x1024 | PNG | Yes | `FileShape` edited overlay | No | Activated only by agent/edit state or future activity data. |
 | `Newly Created File Overlay.png` | Newly created file overlay | 1024x1024 | PNG | Yes | `FileShape` created overlay | No | Activated on graph update for files absent from previous graph, not on first load. |
@@ -49,6 +61,7 @@ The prompt mentioned `green.png`, but the provided repeating grass background is
 - The renderer never depends on image success for visibility; SVG fallback towns, buildings, roads, labels, and badges remain.
 - Folder and building images use `pointer-events: none` so they do not block folder, file, or road interaction.
 - Folder borders are composed from corner, side, and support pieces. Corners and supports keep fixed dimensions; side rails stretch to fit any folder width or height.
+- Ground and nature decor is generated deterministically after layout from weighted groups: large trees/logs first, medium bushes/rocks second, then small grass, moss, dirt, flower, and mushroom patches. Collision checks reserve padded building, label, road, and folder-border space before placing decor.
 - `grass03.png` repeats as an SVG pattern inside the map coordinate system so it moves with map scroll and zoom.
 - The horizontal road PNG is used only as a restrained horizontal texture layer. Programmatic SVG paths and arrow markers preserve dependency direction.
 - Folder and file labels remain real text and are not baked into images.

@@ -516,6 +516,8 @@ h3 {
 .folder-side-image,
 .folder-support-image,
 .folder-sign-image,
+.decor-image,
+.decor-shadow-image,
 .building-image,
 .building-overlay,
 .agent-image {
@@ -543,6 +545,24 @@ h3 {
 .folder-sign-image {
   opacity: 1;
   filter: drop-shadow(0 5px 5px rgba(0, 0, 0, 0.45));
+}
+
+.decor-layer {
+  pointer-events: none;
+}
+
+.decor-image {
+  image-rendering: auto;
+  opacity: 0.94;
+}
+
+.decor-item.small .decor-image {
+  opacity: 0.72;
+}
+
+.decor-shadow-image {
+  opacity: 0.34;
+  mix-blend-mode: multiply;
 }
 
 .folder-title {

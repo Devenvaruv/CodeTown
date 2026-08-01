@@ -11,6 +11,20 @@ export type OverlayAssetKind =
   | "readPulse"
   | "editPulse";
 
+export type DecorAssetKind =
+  | "groundRockCluster"
+  | "groundMossPatch"
+  | "groundGrassPatchTall"
+  | "groundGrassPatchSoft"
+  | "groundDirtPatch"
+  | "groundShadowBlob"
+  | "natureFlowerPatch"
+  | "natureFallenLog"
+  | "natureBushCluster"
+  | "natureTreeBroadleaf"
+  | "natureTreePine"
+  | "natureMushroomCluster";
+
 export interface MapAssetDefinition {
   fileName?: string;
   requiredForMvp: boolean;
@@ -63,6 +77,20 @@ export const mapAssets = {
   },
   roads: {
     horizontal: asset("Horizontal Road.png", false, "Horizontal dependency road tile")
+  },
+  decor: {
+    groundRockCluster: asset("ground_rock_cluster.png", false, "Ground rock cluster decor"),
+    groundMossPatch: asset("ground_moss_patch.png", false, "Ground moss patch decor"),
+    groundGrassPatchTall: asset("ground_grass_patch_tall.png", false, "Tall grass patch decor"),
+    groundGrassPatchSoft: asset("ground_grass_patch_soft.png", false, "Soft grass patch decor"),
+    groundDirtPatch: asset("ground_dirt_patch.png", false, "Dirt patch ground variation"),
+    groundShadowBlob: asset("ground_shadow_blob.png", false, "Soft shadow blob under larger decor"),
+    natureFlowerPatch: asset("nature_flower_patch.png", false, "Flower patch nature decor"),
+    natureFallenLog: asset("nature_fallen_log.png", false, "Fallen log nature decor"),
+    natureBushCluster: asset("nature_bush_cluster.png", false, "Bush cluster nature decor"),
+    natureTreeBroadleaf: asset("nature_tree_broadleaf.png", false, "Broadleaf tree nature decor"),
+    natureTreePine: asset("nature_tree_pine.png", false, "Pine tree nature decor"),
+    natureMushroomCluster: asset("nature_mushroom_cluster.png", false, "Mushroom cluster nature decor")
   },
   overlays: {
     selected: asset("Selected Building Overlay.png", false, "Selected-building overlay"),
@@ -120,6 +148,7 @@ export function flattenAssetDefinitions(): MapAssetDefinition[] {
     ...Object.values(mapAssets.buildings),
     ...Object.values(mapAssets.folders),
     ...Object.values(mapAssets.roads),
+    ...Object.values(mapAssets.decor),
     ...Object.values(mapAssets.overlays),
     ...Object.values(mapAssets.agents)
   ];
