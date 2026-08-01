@@ -46,6 +46,7 @@ export function App(): JSX.Element {
   const [layout, setLayout] = useState<TownLayout | undefined>();
   const [showProjectHud, setShowProjectHud] = useState(true);
   const [showLegend, setShowLegend] = useState(true);
+  const [showMiniMap, setShowMiniMap] = useState(true);
   const mapPanelRef = useRef<HTMLElement | null>(null);
   const previousFileIdsRef = useRef<Set<string>>(new Set());
   const previousLayoutPositionsRef = useRef<Map<string, Point>>(new Map());
@@ -404,7 +405,12 @@ export function App(): JSX.Element {
           <div className="empty-state">{status}</div>
         )}
         {layout && layout.layoutWarnings.length > 0 && <LayoutWarningOverlay warnings={layout.layoutWarnings} />}
-        {layout && <MiniMap layout={layout} selectedId={selection?.id} />}
+        {layout && showMiniMap && <MiniMap layout={layout} selectedId={selection?.id} onClose={() => setShowMiniMap(false)} />}
+        {layout && !showMiniMap && (
+          <button type="button" className="hud-reopen mini-map-reopen" onClick={() => setShowMiniMap(true)}>
+            Map
+          </button>
+        )}
         {layout && showStreetDebug && <RoadDebugPanel debug={layout.roadDebug} />}
       </section>
 
@@ -546,13 +552,14 @@ function LegendItem(props: { image?: string; className?: string; label: string }
   );
 }
 
-function MiniMap(props: { layout: TownLayout; selectedId: string | undefined }): JSX.Element {
+function MiniMap(props: { layout: TownLayout; selectedId: string | undefined; onClose(): void }): JSX.Element {
   const scaleX = 180 / props.layout.width;
   const scaleY = 120 / props.layout.height;
   const scale = Math.min(scaleX, scaleY);
 
   return (
     <aside className="mini-map hud-card" aria-label="Map overview">
+      <PanelDismissButton label="Hide map overview" onClose={props.onClose} />
       <svg viewBox={`0 0 ${props.layout.width * scale} ${props.layout.height * scale}`}>
         {props.layout.folders.map((folder) => (
           <rect
@@ -698,8 +705,8 @@ const FOLDER_BORDER = {
 } as const;
 
 const FOLDER_BORDER_CROPS = {
-  corner: { x: 440, y: 171, width: 658, height: 589 },
-  side: { x: 120, y: 460, width: 1297, height: 83 },
+  corner: { x: 440, y: 171, width: 200, height: 200 },
+  side: { x: 520, y: 460, width: 480, height: 83 },
   support: { x: 485, y: 371, width: 567, height: 202 }
 } as const;
 
@@ -752,10 +759,10 @@ function FolderBorderShape(props: { node: LayoutNode }): JSX.Element {
       )}
       {cornerUrl && (
         <>
-          <FolderBorderPiece href={cornerUrl} crop={FOLDER_BORDER_CROPS.corner} x={x - corner / 2} y={y - corner / 2} width={corner} height={corner} className="folder-corner-image" />
-          <FolderBorderPiece href={cornerUrl} crop={FOLDER_BORDER_CROPS.corner} x={x + width - corner / 2} y={y - corner / 2} width={corner} height={corner} rotation={90} className="folder-corner-image" />
-          <FolderBorderPiece href={cornerUrl} crop={FOLDER_BORDER_CROPS.corner} x={x + width - corner / 2} y={y + height - corner / 2} width={corner} height={corner} rotation={180} className="folder-corner-image" />
-          <FolderBorderPiece href={cornerUrl} crop={FOLDER_BORDER_CROPS.corner} x={x - corner / 2} y={y + height - corner / 2} width={corner} height={corner} rotation={270} className="folder-corner-image" />
+          <FolderBorderPiece href={cornerUrl} crop={FOLDER_BORDER_CROPS.corner} x={x - rail / 2} y={y - rail / 2} width={corner} height={corner} className="folder-corner-image" />
+          <FolderBorderPiece href={cornerUrl} crop={FOLDER_BORDER_CROPS.corner} x={x + width - corner + rail / 2} y={y - rail / 2} width={corner} height={corner} rotation={90} className="folder-corner-image" />
+          <FolderBorderPiece href={cornerUrl} crop={FOLDER_BORDER_CROPS.corner} x={x + width - corner + rail / 2} y={y + height - corner + rail / 2} width={corner} height={corner} rotation={180} className="folder-corner-image" />
+          <FolderBorderPiece href={cornerUrl} crop={FOLDER_BORDER_CROPS.corner} x={x - rail / 2} y={y + height - corner + rail / 2} width={corner} height={corner} rotation={270} className="folder-corner-image" />
         </>
       )}
     </g>

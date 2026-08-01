@@ -120,6 +120,11 @@ button:focus {
   bottom: 72px;
 }
 
+.mini-map-reopen {
+  top: 12px;
+  right: 12px;
+}
+
 .sidebar {
   position: absolute;
   top: 12px;
@@ -263,12 +268,13 @@ button:focus {
 
 .mini-map {
   position: absolute;
-  top: 20px;
-  right: 20px;
+  top: 12px;
+  right: 12px;
   z-index: 5;
   width: 210px;
   height: 140px;
-  padding: 10px;
+  padding: 12px;
+  padding-top: 28px;
 }
 
 .mini-map svg {

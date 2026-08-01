@@ -231,8 +231,8 @@ export const GRID_LAYOUT_CONSTANTS = {
   folderPadding: 56,
   folderHeaderHeight: 48,
   folderGap: 220,
-  maxFolderColumns: 4,
-  maxTopLevelColumns: 4,
+  maxFolderColumns: 6,
+  maxTopLevelColumns: 6,
   targetTopLevelWidth: 1680,
   minBuildingWidth: 64,
   minBuildingHeight: 72
@@ -489,7 +489,7 @@ function chooseChildFolderColumns(children: MeasuredFolder[], fileGrid: GridMeas
     const width = Math.max(fileGrid.width, grid.width) + GRID_LAYOUT_CONSTANTS.folderPadding * 2;
     const height = GRID_LAYOUT_CONSTANTS.folderHeaderHeight + GRID_LAYOUT_CONSTANTS.folderPadding * 2 + contentHeight;
     const aspect = height / Math.max(1, width);
-    const aspectPenalty = aspect > MAX_FOLDER_ASPECT ? 1000 + aspect * 100 : Math.abs(1.25 - aspect) * 10;
+    const aspectPenalty = aspect > MAX_FOLDER_ASPECT ? 1000 + aspect * 100 : Math.abs(1 - aspect) * 10;
     const widthPenalty = columns > 1 ? grid.width / 10000 : 0;
     const score = aspectPenalty + widthPenalty;
     if (score < bestScore) {
@@ -628,7 +628,7 @@ function chooseTopLevelColumns(items: GridItem[], direction: LayoutDirection | u
     const variance = sum(rowWidths.map((width) => Math.abs(width - averageRowWidth))) / Math.max(1, rowWidths.length);
     const targetPenalty = Math.abs(grid.width - GRID_LAYOUT_CONSTANTS.targetTopLevelWidth) / 100;
     const aspect = grid.height / Math.max(1, grid.width);
-    const score = variance / 100 + targetPenalty + Math.abs(0.7 - aspect) * 20;
+    const score = variance / 100 + targetPenalty + Math.abs(1 - aspect) * 50;
     if (score < bestScore) {
       bestScore = score;
       bestColumns = columns;
