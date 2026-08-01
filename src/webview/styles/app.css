@@ -506,7 +506,9 @@ h3 {
 }
 
 .folder-district-image,
-.folder-boundary-image,
+.folder-corner-image,
+.folder-side-image,
+.folder-support-image,
 .folder-sign-image,
 .building-image,
 .building-overlay,
@@ -525,8 +527,11 @@ h3 {
   mix-blend-mode: multiply;
 }
 
-.folder-boundary-image {
+.folder-corner-image,
+.folder-side-image,
+.folder-support-image {
   opacity: 0.95;
+  overflow: visible;
 }
 
 .folder-sign-image {
@@ -640,6 +645,58 @@ h3 {
   stroke-width: 20;
 }
 
+.road-group.spine .road-base {
+  stroke-width: 5;
+  opacity: 0.34;
+}
+
+.road-group.spine .road-lane {
+  stroke-width: 1.1;
+  opacity: 0.42;
+  stroke-dasharray: 5 9;
+}
+
+.road-group.collector .road-base {
+  stroke-width: 4;
+  opacity: 0.3;
+}
+
+.road-group.collector .road-lane {
+  stroke-width: 1;
+  opacity: 0.34;
+  stroke-dasharray: 4 8;
+}
+
+.road-group.branch .road-base {
+  stroke-width: 2;
+  opacity: 0.3;
+}
+
+.road-group.branch .road-lane {
+  stroke-width: 0.8;
+  opacity: 0.32;
+  stroke-dasharray: 3 7;
+}
+
+.road-group.spine .road-hit,
+.road-group.collector .road-hit,
+.road-group.branch .road-hit,
+.road-group.parent-child .road-hit {
+  stroke-width: 14;
+}
+
+.road-group.parent-child .road-base {
+  stroke-width: 4.5;
+  opacity: 0.36;
+  stroke: rgba(94, 89, 117, 0.82);
+}
+
+.road-group.parent-child .road-lane {
+  stroke-width: 1.1;
+  opacity: 0.46;
+  stroke-dasharray: 8 5 2 5;
+}
+
 .road-count rect {
   fill: rgba(17, 23, 22, 0.86);
   stroke: rgba(255, 255, 255, 0.18);
@@ -654,11 +711,11 @@ h3 {
   pointer-events: none;
 }
 
-.road.type-only {
+.road-group.type-only .road-lane {
   stroke-dasharray: 7 5;
 }
 
-.road.dynamic {
+.road-group.dynamic .road-lane {
   stroke-dasharray: 2 6;
 }
 
@@ -709,6 +766,120 @@ h3 {
 .layout-debug-node text {
   fill: #fff3a3;
   font-size: 10px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.86);
+  stroke-width: 3px;
+}
+
+.layout-debug-route circle,
+.layout-debug-gateway circle,
+.layout-debug-port circle,
+.layout-debug-connector circle,
+.layout-debug-junction circle,
+.layout-debug-external-junction circle {
+  fill: rgba(255, 255, 255, 0.82);
+  stroke-width: 2;
+}
+
+.layout-debug-route.spine circle {
+  stroke: #2563eb;
+}
+
+.layout-debug-route.collector circle {
+  stroke: #0891b2;
+}
+
+.layout-debug-route.branch circle {
+  stroke: #16a34a;
+}
+
+.layout-debug-street line {
+  fill: none;
+  stroke-width: 3;
+  stroke-dasharray: 5 4;
+}
+
+.layout-debug-street.spine line {
+  stroke: #f59e0b;
+}
+
+.layout-debug-street.collector line {
+  stroke: #06b6d4;
+}
+
+.layout-debug-street.spur line {
+  stroke: #22c55e;
+}
+
+.layout-debug-connector line {
+  fill: none;
+  stroke: #ec4899;
+  stroke-width: 3;
+  stroke-dasharray: 9 4 2 4;
+}
+
+.layout-debug-external-corridor line {
+  fill: none;
+  stroke: rgba(148, 163, 184, 0.68);
+  stroke-width: 2;
+  stroke-dasharray: 3 5;
+}
+
+.layout-debug-folder-trunk path {
+  fill: none;
+  stroke: #f97316;
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.72;
+}
+
+.layout-debug-folder-trunk.active path {
+  stroke: #facc15;
+  stroke-width: 7;
+  opacity: 0.95;
+}
+
+.layout-debug-street circle,
+.layout-debug-connector circle {
+  fill: #111827;
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+
+.layout-debug-junction circle {
+  fill: #111827;
+  stroke: #f8fafc;
+}
+
+.layout-debug-external-junction circle {
+  fill: #0f172a;
+  stroke: #f97316;
+}
+
+.layout-debug-route.trunk circle,
+.layout-debug-gateway circle {
+  stroke: #dc2626;
+}
+
+.layout-debug-port circle {
+  stroke: #7c3aed;
+}
+
+.layout-debug-connector circle {
+  stroke: #ec4899;
+}
+
+.layout-debug-route text,
+.layout-debug-street text,
+.layout-debug-gateway text,
+.layout-debug-port text,
+.layout-debug-connector text,
+.layout-debug-junction text,
+.layout-debug-folder-trunk text {
+  fill: #fff;
+  font-size: 9px;
   font-weight: 700;
   paint-order: stroke;
   stroke: rgba(0, 0, 0, 0.86);

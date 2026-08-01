@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { getVisibleBuildingBounds, VISIBLE_BUILDING_GEOMETRY } from "../graph/layout/buildingGeometry";
 import { buildTownLayout, type LayoutDirection, type LayoutNode, type Point, type TownLayout } from "../graph/layout/elkLayout";
 import { visibleRoadsForState } from "../graph/layout/roadVisibility";
 import type { FileNode, FolderNode, ImportConnection, ProjectGraph } from "../shared/graphTypes";
@@ -41,6 +42,7 @@ export function App(): JSX.Element {
   const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
   const [layoutDirection, setLayoutDirection] = useState<LayoutDirection>("RIGHT");
   const [showAllDependencies, setShowAllDependencies] = useState(false);
+  const [showStreetDebug, setShowStreetDebug] = useState(() => isLayoutDebugModeEnabled());
   const [layout, setLayout] = useState<TownLayout | undefined>();
   const [showProjectHud, setShowProjectHud] = useState(true);
   const [showLegend, setShowLegend] = useState(true);
@@ -148,17 +150,27 @@ export function App(): JSX.Element {
         direction: layoutDirection,
         visibleConnections,
         previousPositions: previousLayoutPositionsRef.current
-      }).then((nextLayout) => {
-        if (layoutRequestIdRef.current !== requestId) {
-          return;
-        }
-        setLayout(nextLayout);
-        previousLayoutPositionsRef.current = positionsFromLayout(nextLayout);
-        if (autoFitProjectIdRef.current !== graph.project.id) {
-          autoFitProjectIdRef.current = graph.project.id;
-          fitLayoutToPanel(nextLayout);
-        }
-      });
+      })
+        .then((nextLayout) => {
+          if (layoutRequestIdRef.current !== requestId) {
+            return;
+          }
+          setLayout(nextLayout);
+          previousLayoutPositionsRef.current = positionsFromLayout(nextLayout);
+          if (autoFitProjectIdRef.current !== graph.project.id) {
+            autoFitProjectIdRef.current = graph.project.id;
+            fitLayoutToPanel(nextLayout);
+          }
+        })
+        .catch((error: unknown) => {
+          if (layoutRequestIdRef.current !== requestId) {
+            return;
+          }
+          const message = error instanceof Error ? error.message : String(error);
+          console.error("Codebase Town layout failed.", error);
+          setLayout(undefined);
+          setStatus(`Layout failed: ${message}`);
+        });
     }, 80);
 
     return () => window.clearTimeout(timeoutId);
@@ -171,7 +183,6 @@ export function App(): JSX.Element {
   );
   const foldersByDepth = useMemo(() => [...(layout?.folders ?? [])].sort((a, b) => (folderMap.get(a.id)?.depth ?? 0) - (folderMap.get(b.id)?.depth ?? 0) || a.id.localeCompare(b.id)), [layout, folderMap]);
   const hasCompleteLayout = useMemo(() => Boolean(layout && layout.layoutWarnings.length === 0 && layout.files.every(hasValidBounds) && layout.folders.every(hasValidBounds)), [layout]);
-  const showLayoutDebug = useMemo(() => isLayoutDebugModeEnabled(), []);
   const selectedFile = selection?.kind === "file" ? fileMap.get(selection.id) : undefined;
   const selectedLayoutRoad = selection?.kind === "road" ? layout?.roads.find((road) => road.id === selection.id) : undefined;
   const selectedRoad = selectedLayoutRoad ? connectionMap.get(selectedLayoutRoad.connectionId) : undefined;
@@ -201,7 +212,7 @@ export function App(): JSX.Element {
     }
     const renderedPairs = new Set<string>();
     for (const road of renderedRoads) {
-      const pair = `${road.providerFolderId ?? road.sourceId}->${road.consumerFolderId ?? road.targetId}:${road.routeKind}`;
+      const pair = road.id;
       if (renderedPairs.has(pair)) {
         console.warn(`Codebase Town rendered duplicate road ${pair}.`);
       }
@@ -213,12 +224,45 @@ export function App(): JSX.Element {
         console.warn(`Codebase Town road ${road.id} is missing target bounds.`);
       }
     }
-    if (renderedRoads.some((road) => road.level === "file" || road.routeKind !== "trunk")) {
-      console.warn("Codebase Town road policy violation: only folder trunks may be rendered.");
+    if (renderedRoads.some((road) => road.routeKind === "direct")) {
+      console.warn("Codebase Town road policy violation: direct file-to-file roads may not be rendered.");
     }
     const debug = layout.roadDebug;
-    if (debug.duplicateBundleCount > 0 || debug.diagonalSegmentCount > 0 || debug.trunksIntersectingFolderBounds > 0 || debug.trunksIntersectingBuildingBounds > 0) {
-      console.warn("Codebase Town trunk debug counters are non-zero.", debug);
+    if (
+      debug.duplicateBundleCount > 0 ||
+      debug.diagonalSegmentCount > 0 ||
+      debug.trunksIntersectingFolderBounds > 0 ||
+      debug.trunksIntersectingBuildingBounds > 0 ||
+      debug.filesWithInvalidMultipleEntrances > 0 ||
+      debug.filesWithZeroPorts > 0 ||
+      debug.filesWithMultiplePorts > 0 ||
+      debug.foldersWithExternalDependenciesWithoutGateway > 0 ||
+      debug.foldersWithMultipleGateways > 0 ||
+      debug.foldersWithGatewayWithoutStreetGraph > 0 ||
+      debug.streetGraphsWithWrongGateway > 0 ||
+      debug.streetGraphsMissingGatewaySpine > 0 ||
+      debug.streetGraphsWithMultiplePrimarySpines > 0 ||
+      debug.filesWithMissingStreetSpur > 0 ||
+      debug.filesWithDuplicateStreetSpurs > 0 ||
+      debug.streetSpursMissingPorts > 0 ||
+      debug.streetEdgesWithDiagonalSegments > 0 ||
+      debug.streetEdgesOutsideFolderBounds > 0 ||
+      debug.streetEdgesIntersectingBuildings > 0 ||
+      debug.streetEdgesIntersectingLabels > 0 ||
+      debug.streetEdgesIntersectingNestedFolders > 0 ||
+      debug.semanticDependencyCount !== debug.exactDependencyRouteCount ||
+      debug.exactRoutesWithDuplicateIds > 0 ||
+      debug.exactRoutesMissingBuildingPort > 0 ||
+      debug.exactRoutesMissingInfrastructure > 0 ||
+      debug.sameFolderRoutesUsingExternalTrunk > 0 ||
+      debug.crossTopLevelRoutesWithoutOneTrunk > 0 ||
+      debug.exactRoutesWithWrongEndpointPort > 0 ||
+      debug.routesBypassingGateway > 0 ||
+      debug.routesBypassingSpineOrCollector > 0 ||
+      debug.buildingIntersectionCount > 0 ||
+      debug.labelIntersectionCount > 0
+    ) {
+      console.warn("Codebase Town road debug counters are non-zero.", debug);
     }
   }, [layout, renderedRoads, showAllDependencies, selection, hoveredFileId]);
 
@@ -285,6 +329,20 @@ export function App(): JSX.Element {
                 onClick={() => setSelection({ kind: "folder", id: folder.id })}
               />
             ))}
+            {hasCompleteLayout && renderedRoads.map((road) => {
+              const connection = connectionMap.get(road.connectionId);
+              const state = roadState(road, selection, connectedIds);
+              return (
+                <RoadShape
+                  key={road.id}
+                  road={road}
+                  connection={connection}
+                  state={state}
+                  title={roadTitle(connection, road, fileMap, folderMap)}
+                  onClick={() => setSelection({ kind: "road", id: road.id })}
+                />
+              );
+            })}
             {layout.files.map((fileNode) => {
               const file = fileMap.get(fileNode.id);
               const state = nodeState(fileNode.id, selection, connectedIds, searchMatches);
@@ -297,20 +355,6 @@ export function App(): JSX.Element {
                   onClick={() => setSelection({ kind: "file", id: fileNode.id })}
                   onMouseEnter={() => setHoveredFileId(fileNode.id)}
                   onMouseLeave={() => setHoveredFileId((current) => (current === fileNode.id ? undefined : current))}
-                />
-              );
-            })}
-            {hasCompleteLayout && renderedRoads.map((road) => {
-              const connection = connectionMap.get(road.connectionId);
-              const state = roadState(road, selection, connectedIds);
-              return (
-                <RoadShape
-                  key={road.id}
-                  road={road}
-                  connection={connection}
-                  state={state}
-                  title={roadTitle(connection, road, fileMap, folderMap)}
-                  onClick={() => setSelection({ kind: "road", id: road.id })}
                 />
               );
             })}
@@ -328,7 +372,7 @@ export function App(): JSX.Element {
                 file={fileMap.get(fileNode.id)}
               />
             ))}
-            {showLayoutDebug && <LayoutDebugOverlay layout={layout} />}
+            {showStreetDebug && <LayoutDebugOverlay layout={layout} selection={selection} />}
             {layout.files.map((fileNode) => {
               const file = fileMap.get(fileNode.id);
               const state = nodeState(fileNode.id, selection, connectedIds, searchMatches);
@@ -361,7 +405,7 @@ export function App(): JSX.Element {
         )}
         {layout && layout.layoutWarnings.length > 0 && <LayoutWarningOverlay warnings={layout.layoutWarnings} />}
         {layout && <MiniMap layout={layout} selectedId={selection?.id} />}
-        {layout && showLayoutDebug && <RoadDebugPanel debug={layout.roadDebug} />}
+        {layout && showStreetDebug && <RoadDebugPanel debug={layout.roadDebug} />}
       </section>
 
       {showProjectHud ? (
@@ -420,6 +464,8 @@ export function App(): JSX.Element {
         issueCount={projectIssueCount}
         showAllDependencies={showAllDependencies}
         setShowAllDependencies={setShowAllDependencies}
+        showStreetDebug={showStreetDebug}
+        setShowStreetDebug={setShowStreetDebug}
         zoom={viewport.scale}
         setViewport={setViewport}
         layoutDirection={layoutDirection}
@@ -543,6 +589,8 @@ function BottomToolbar(props: {
   issueCount: number;
   showAllDependencies: boolean;
   setShowAllDependencies(value: boolean): void;
+  showStreetDebug: boolean;
+  setShowStreetDebug(value: boolean): void;
   zoom: number;
   setViewport(value: { scale: number; x: number; y: number } | ((current: { scale: number; x: number; y: number }) => { scale: number; x: number; y: number })): void;
   layoutDirection: LayoutDirection;
@@ -583,6 +631,7 @@ function BottomToolbar(props: {
       </button>
       <FilterToggle label="Type" value={props.filters.typeOnly} onChange={(typeOnly) => props.setFilters((current) => ({ ...current, typeOnly }))} />
       <FilterToggle label="Show all trunks" value={props.showAllDependencies} onChange={props.setShowAllDependencies} />
+      <FilterToggle label="Street debug" value={props.showStreetDebug} onChange={props.setShowStreetDebug} />
       <div className="direction-control" role="group" aria-label="Layout direction">
         <button type="button" className={props.layoutDirection === "RIGHT" ? "active" : ""} title="Left-to-right layout" onClick={() => props.setLayoutDirection("RIGHT")}>
           L-R
@@ -630,15 +679,134 @@ function FolderDistrictShape(props: {
 }): JSX.Element {
   const districtAsset = props.folder && props.folder.depth > 1 ? mapAssets.backgrounds.subfolder : mapAssets.backgrounds.folder;
   const districtUrl = assetUrl(districtAsset);
-  const boundaryUrl = assetUrl(mapAssets.folders.boundary);
 
   return (
     <g className={`folder-node ${props.isExpanded ? "expanded" : "collapsed"} ${props.isSelected ? "selected" : ""} ${props.isSearchMatch ? "search-match" : ""}`} onClick={props.onClick}>
       <rect x={props.node.x} y={props.node.y} width={props.node.width} height={props.node.height} rx="8" />
       <OptionalSvgImage href={districtUrl} x={props.node.x} y={props.node.y} width={props.node.width} height={props.node.height} className="folder-district-image" preserveAspectRatio="xMidYMid slice" />
-      <OptionalSvgImage href={boundaryUrl} x={props.node.x} y={props.node.y} width={props.node.width} height={props.node.height} className="folder-boundary-image" preserveAspectRatio="xMidYMid meet" />
+      <FolderBorderShape node={props.node} />
     </g>
   );
+}
+
+const FOLDER_BORDER = {
+  cornerSize: 58,
+  railThickness: 18,
+  supportWidth: 46,
+  supportHeight: 18,
+  supportTargetSpacing: 220
+} as const;
+
+const FOLDER_BORDER_CROPS = {
+  corner: { x: 440, y: 171, width: 658, height: 589 },
+  side: { x: 120, y: 460, width: 1297, height: 83 },
+  support: { x: 485, y: 371, width: 567, height: 202 }
+} as const;
+
+function FolderBorderShape(props: { node: LayoutNode }): JSX.Element {
+  const cornerUrl = assetUrl(mapAssets.folders.corner);
+  const sideUrl = assetUrl(mapAssets.folders.side);
+  const supportUrl = assetUrl(mapAssets.folders.support);
+  const corner = FOLDER_BORDER.cornerSize;
+  const rail = FOLDER_BORDER.railThickness;
+  const supportW = FOLDER_BORDER.supportWidth;
+  const supportH = FOLDER_BORDER.supportHeight;
+  const x = props.node.x;
+  const y = props.node.y;
+  const width = props.node.width;
+  const height = props.node.height;
+  const horizontalRailLength = Math.max(0, width - corner);
+  const verticalRailLength = Math.max(0, height - corner);
+  const topY = y - rail / 2;
+  const bottomY = y + height - rail / 2;
+  const leftX = x - rail / 2;
+  const rightX = x + width - rail / 2;
+  const topSupportCenters = folderBorderSupportCenters(x + corner / 2, x + width - corner / 2, supportW);
+  const verticalSupportCenters = folderBorderSupportCenters(y + corner / 2, y + height - corner / 2, supportW);
+
+  return (
+    <g className="folder-border" pointerEvents="none">
+      {sideUrl && (
+        <>
+          <FolderBorderPiece href={sideUrl} crop={FOLDER_BORDER_CROPS.side} x={x + corner / 2} y={topY} width={horizontalRailLength} height={rail} className="folder-side-image" preserveAspectRatio="none" />
+          <FolderBorderPiece href={sideUrl} crop={FOLDER_BORDER_CROPS.side} x={x + corner / 2} y={bottomY} width={horizontalRailLength} height={rail} rotation={180} className="folder-side-image" preserveAspectRatio="none" />
+          <FolderBorderPiece href={sideUrl} crop={FOLDER_BORDER_CROPS.side} x={leftX} y={y + corner / 2} width={rail} height={verticalRailLength} rotation={270} className="folder-side-image" preserveAspectRatio="none" />
+          <FolderBorderPiece href={sideUrl} crop={FOLDER_BORDER_CROPS.side} x={rightX} y={y + corner / 2} width={rail} height={verticalRailLength} rotation={90} className="folder-side-image" preserveAspectRatio="none" />
+        </>
+      )}
+      {supportUrl && (
+        <>
+          {topSupportCenters.map((centerX) => (
+            <FolderBorderPiece key={`top-support:${centerX}`} href={supportUrl} crop={FOLDER_BORDER_CROPS.support} x={centerX - supportW / 2} y={topY} width={supportW} height={supportH} className="folder-support-image" />
+          ))}
+          {topSupportCenters.map((centerX) => (
+            <FolderBorderPiece key={`bottom-support:${centerX}`} href={supportUrl} crop={FOLDER_BORDER_CROPS.support} x={centerX - supportW / 2} y={bottomY} width={supportW} height={supportH} rotation={180} className="folder-support-image" />
+          ))}
+          {verticalSupportCenters.map((centerY) => (
+            <FolderBorderPiece key={`left-support:${centerY}`} href={supportUrl} crop={FOLDER_BORDER_CROPS.support} x={leftX} y={centerY - supportW / 2} width={supportH} height={supportW} rotation={270} className="folder-support-image" />
+          ))}
+          {verticalSupportCenters.map((centerY) => (
+            <FolderBorderPiece key={`right-support:${centerY}`} href={supportUrl} crop={FOLDER_BORDER_CROPS.support} x={rightX} y={centerY - supportW / 2} width={supportH} height={supportW} rotation={90} className="folder-support-image" />
+          ))}
+        </>
+      )}
+      {cornerUrl && (
+        <>
+          <FolderBorderPiece href={cornerUrl} crop={FOLDER_BORDER_CROPS.corner} x={x - corner / 2} y={y - corner / 2} width={corner} height={corner} className="folder-corner-image" />
+          <FolderBorderPiece href={cornerUrl} crop={FOLDER_BORDER_CROPS.corner} x={x + width - corner / 2} y={y - corner / 2} width={corner} height={corner} rotation={90} className="folder-corner-image" />
+          <FolderBorderPiece href={cornerUrl} crop={FOLDER_BORDER_CROPS.corner} x={x + width - corner / 2} y={y + height - corner / 2} width={corner} height={corner} rotation={180} className="folder-corner-image" />
+          <FolderBorderPiece href={cornerUrl} crop={FOLDER_BORDER_CROPS.corner} x={x - corner / 2} y={y + height - corner / 2} width={corner} height={corner} rotation={270} className="folder-corner-image" />
+        </>
+      )}
+    </g>
+  );
+}
+
+function FolderBorderPiece(props: {
+  href: string;
+  crop: { x: number; y: number; width: number; height: number };
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation?: number;
+  className: string;
+  preserveAspectRatio?: string;
+}): JSX.Element | null {
+  if (props.width <= 0 || props.height <= 0) {
+    return null;
+  }
+
+  const centerX = props.x + props.width / 2;
+  const centerY = props.y + props.height / 2;
+  const isQuarterTurn = props.rotation === 90 || props.rotation === 270;
+  const renderWidth = isQuarterTurn ? props.height : props.width;
+  const renderHeight = isQuarterTurn ? props.width : props.height;
+  const renderX = centerX - renderWidth / 2;
+  const renderY = centerY - renderHeight / 2;
+  return (
+    <svg
+      x={renderX}
+      y={renderY}
+      width={renderWidth}
+      height={renderHeight}
+      viewBox={`${props.crop.x} ${props.crop.y} ${props.crop.width} ${props.crop.height}`}
+      preserveAspectRatio={props.preserveAspectRatio ?? "xMidYMid meet"}
+      className={props.className}
+      transform={props.rotation ? `rotate(${props.rotation} ${centerX} ${centerY})` : undefined}
+    >
+      <image href={props.href} x={0} y={0} width={1536} height={1024} preserveAspectRatio="none" />
+    </svg>
+  );
+}
+
+function folderBorderSupportCenters(start: number, end: number, supportLength: number): number[] {
+  const length = Math.max(0, end - start);
+  const count = Math.max(0, Math.floor(length / FOLDER_BORDER.supportTargetSpacing));
+  if (count === 0 || length < supportLength * 2) {
+    return [];
+  }
+  return Array.from({ length: count }, (_, index) => Math.round(start + (length * (index + 1)) / (count + 1)));
 }
 
 function FolderLabelShape(props: {
@@ -674,15 +842,17 @@ function RoadShape(props: {
   title: string;
   onClick(): void;
 }): JSX.Element {
-  const roadClass = `${props.road.routeKind} ${props.road.endpointRole ?? ""} ${props.connection?.type ?? props.road.dependencyTypes[0] ?? "runtime"} ${props.connection?.isCircular ? "circular" : ""} ${props.road.isAggregated ? "aggregated" : ""} ${props.state}`;
+  const dependencyTypeClass = props.road.dependencyTypes.length === 1 ? props.road.dependencyTypes[0] : "mixed-types";
+  const roadClass = `${props.road.routeKind} ${props.road.infrastructureKind} ${props.road.endpointRole ?? ""} ${dependencyTypeClass} ${props.road.hasCircularDependency || props.connection?.isCircular ? "circular" : ""} ${props.road.isAggregated ? "aggregated" : ""} ${props.road.direction} ${props.state}`;
   const path = roadPathData(props.road);
-  const labelPoint = roadLabelPoint(props.road.points);
+  const labelPoint = props.road.showCountLabel ? roadLabelPoint(props.road.points) : undefined;
   const countText = `${props.road.dependencyCount} ${props.road.dependencyCount === 1 ? "dependency" : "dependencies"}`;
   const badgeWidth = Math.max(78, countText.length * 6.4 + 16);
+  const showArrow = props.road.routeKind === "trunk" && props.road.direction === "provider-to-consumer";
   return (
     <g className={`road-group ${roadClass}`} onClick={props.onClick}>
       <path d={path} className="road road-base" />
-      <path d={path} className="road road-lane" markerEnd="url(#arrow)" />
+      <path d={path} className="road road-lane" markerEnd={showArrow ? "url(#arrow)" : undefined} />
       {labelPoint && (
         <g className="road-count" transform={`translate(${labelPoint.x}, ${labelPoint.y - 14})`}>
           <rect x={-badgeWidth / 2} y={-11} width={badgeWidth} height={18} rx={7} />
@@ -727,20 +897,83 @@ function LayoutWarningOverlay(props: { warnings: string[] }): JSX.Element {
 function RoadDebugPanel(props: { debug: TownLayout["roadDebug"] }): JSX.Element {
   const items: [string, number][] = [
     ["Semantic file dependencies", props.debug.semanticFileDependencyCount],
+    ["Visible files", props.debug.visibleFileCount],
+    ["File ports", props.debug.filePortCount],
+    ["Invalid entrances", props.debug.filesWithInvalidMultipleEntrances],
+    ["Files without ports", props.debug.filesWithZeroPorts],
+    ["Files with multiple ports", props.debug.filesWithMultiplePorts],
+    ["External folders", props.debug.externallyConnectedFolderCount],
+    ["Folders needing streets", props.debug.expandedFoldersNeedingStreetCount],
+    ["Participating files", props.debug.participatingFileCount],
+    ["Folders without gateways", props.debug.foldersWithExternalDependenciesWithoutGateway],
+    ["Folders with multiple gateways", props.debug.foldersWithMultipleGateways],
+    ["Internal street graphs", props.debug.internalStreetGraphCount],
+    ["Gateways without street graphs", props.debug.foldersWithGatewayWithoutStreetGraph],
+    ["Street graphs wrong gateway", props.debug.streetGraphsWithWrongGateway],
+    ["Street graphs without spine", props.debug.streetGraphsMissingGatewaySpine],
+    ["Street graphs multiple spines", props.debug.streetGraphsWithMultiplePrimarySpines],
+    ["Missing street spurs", props.debug.filesWithMissingStreetSpur],
+    ["Duplicate street spurs", props.debug.filesWithDuplicateStreetSpurs],
+    ["Street spurs missing ports", props.debug.streetSpursMissingPorts],
+    ["Street diagonal segments", props.debug.streetEdgesWithDiagonalSegments],
+    ["Street edges outside folders", props.debug.streetEdgesOutsideFolderBounds],
+    ["Street/building intersections", props.debug.streetEdgesIntersectingBuildings],
+    ["Street/label intersections", props.debug.streetEdgesIntersectingLabels],
+    ["Street/nested folder intersections", props.debug.streetEdgesIntersectingNestedFolders],
+    ["Street junctions", props.debug.streetJunctionCount],
+    ["Child folders needing connectors", props.debug.childFoldersNeedingParentConnector],
+    ["Parent-child connectors", props.debug.parentChildConnectorCount],
+    ["Missing parent-child connectors", props.debug.childFoldersMissingParentConnector],
+    ["Duplicate parent-child connectors", props.debug.childFoldersWithDuplicateParentConnectors],
+    ["Connector wrong gateway", props.debug.parentChildConnectorsWrongGateway],
+    ["Connector missing junction", props.debug.parentChildConnectorsMissingParentJunction],
+    ["Connector bypassed child gateway", props.debug.parentChildConnectorsBypassingChildGateway],
+    ["Connector bypassed parent graph", props.debug.parentChildConnectorsBypassingParentStreetGraph],
+    ["Connector diagonal segments", props.debug.parentChildConnectorsWithDiagonalSegments],
+    ["Connector outside parent", props.debug.parentChildConnectorsOutsideParent],
+    ["Connector/building intersections", props.debug.parentChildConnectorsIntersectingBuildings],
+    ["Connector/label intersections", props.debug.parentChildConnectorsIntersectingLabels],
+    ["Connector/sibling intersections", props.debug.parentChildConnectorsIntersectingSiblingFolders],
+    ["Connector crossing child", props.debug.parentChildConnectorsCrossingChildBoundary],
+    ["Expected folder trunks", props.debug.expectedFolderTrunkCount],
+    ["Folder trunks", props.debug.folderTrunkCount],
+    ["External corridor edges", props.debug.externalCorridorEdgeCount],
+    ["External junctions", props.debug.externalJunctionCount],
+    ["Duplicate folder trunks", props.debug.duplicateFolderTrunks],
+    ["Trunk wrong gateway", props.debug.folderTrunksWrongGateway],
+    ["Trunk attached nested", props.debug.folderTrunksAttachedToNestedFolder],
+    ["Trunk diagonal segments", props.debug.folderTrunksWithDiagonalSegments],
+    ["Trunk/folder intersections", props.debug.folderTrunksIntersectingFolders],
+    ["Trunk/building intersections", props.debug.folderTrunksIntersectingBuildings],
+    ["Trunk/label intersections", props.debug.folderTrunksIntersectingLabels],
+    ["Duplicate corridor geometry", props.debug.duplicateExternalCorridorGeometry],
+    ["External junction errors", props.debug.externalJunctionsMissingCorridorEdge],
+    ["Semantic dependencies", props.debug.semanticDependencyCount],
+    ["Exact dependency routes", props.debug.exactDependencyRouteCount],
+    ["Duplicate exact routes", props.debug.exactRoutesWithDuplicateIds],
+    ["Exact routes missing ports", props.debug.exactRoutesMissingBuildingPort],
+    ["Exact routes missing infrastructure", props.debug.exactRoutesMissingInfrastructure],
+    ["Same-folder routes using trunks", props.debug.sameFolderRoutesUsingExternalTrunk],
+    ["Cross-top routes missing trunk", props.debug.crossTopLevelRoutesWithoutOneTrunk],
+    ["Exact routes wrong endpoint", props.debug.exactRoutesWithWrongEndpointPort],
     ["Generated folder bundles", props.debug.generatedFolderBundleCount],
     ["Rendered trunks", props.debug.renderedTrunkCount],
     ["Rejected trunks", props.debug.rejectedTrunkCount],
     ["Duplicate bundles", props.debug.duplicateBundleCount],
     ["Diagonal segments", props.debug.diagonalSegmentCount],
     ["Trunks crossing folders", props.debug.trunksIntersectingFolderBounds],
-    ["Trunks crossing buildings", props.debug.trunksIntersectingBuildingBounds]
+    ["Trunks crossing buildings", props.debug.trunksIntersectingBuildingBounds],
+    ["Bypassing gateway", props.debug.routesBypassingGateway],
+    ["Bypassing street levels", props.debug.routesBypassingSpineOrCollector],
+    ["Building intersections", props.debug.buildingIntersectionCount],
+    ["Label intersections", props.debug.labelIntersectionCount]
   ];
   return (
     <aside className="road-debug-panel hud-card">
       <h2>Road Debug</h2>
       <dl>
         {items.map(([label, value]) => (
-          <div key={label} className={value > 0 && /Duplicate|Diagonal|crossing/.test(label) ? "bad" : ""}>
+          <div key={label} className={value > 0 && /Invalid|Duplicate|Diagonal|crossing|Bypassing|intersections/.test(label) ? "bad" : ""}>
             <dt>{label}</dt>
             <dd>{value}</dd>
           </div>
@@ -750,7 +983,10 @@ function RoadDebugPanel(props: { debug: TownLayout["roadDebug"] }): JSX.Element 
   );
 }
 
-function LayoutDebugOverlay(props: { layout: TownLayout }): JSX.Element {
+function LayoutDebugOverlay(props: { layout: TownLayout; selection: Selection | undefined }): JSX.Element {
+  const gateways = props.layout.folderGateways;
+  const selectedFolderId = props.selection?.kind === "folder" ? props.selection.id : undefined;
+  const selectedRoadId = props.selection?.kind === "road" ? props.selection.id : undefined;
   return (
     <g className="layout-debug-layer" pointerEvents="none">
       {[...props.layout.folders, ...props.layout.files].map((node) => {
@@ -767,6 +1003,87 @@ function LayoutDebugOverlay(props: { layout: TownLayout }): JSX.Element {
           </g>
         );
       })}
+      {props.layout.roads.map((road) => (
+        <g key={`${road.id}:route-debug`} className={`layout-debug-route ${road.routeKind}`}>
+          {road.points.map((point, index) => (
+            <g key={`${road.id}:route-debug:${index}`}>
+              <circle cx={point.x} cy={point.y} r={3} />
+              <text x={point.x + 5} y={point.y - 5}>
+                {road.routeKind}:{road.level}
+              </text>
+            </g>
+          ))}
+        </g>
+      ))}
+      {[...props.layout.routingPlan.internalStreetGraphs.values()].flatMap((streetGraph) => streetGraph.edges).map((edge) => (
+        <g key={`${edge.id}:street-debug`} className={`layout-debug-street ${edge.kind}`}>
+          <line x1={edge.from.x} y1={edge.from.y} x2={edge.to.x} y2={edge.to.y} />
+          <circle cx={edge.from.x} cy={edge.from.y} r={3} />
+          <circle cx={edge.to.x} cy={edge.to.y} r={3} />
+          <text x={(edge.from.x + edge.to.x) / 2 + 5} y={(edge.from.y + edge.to.y) / 2 - 5}>
+            {edge.kind}
+          </text>
+        </g>
+      ))}
+      {[...props.layout.routingPlan.parentChildConnectors.values()].flatMap((connector) => connector.edges).map((edge) => (
+        <g key={`${edge.id}:connector-debug`} className="layout-debug-connector">
+          <line x1={edge.from.x} y1={edge.from.y} x2={edge.to.x} y2={edge.to.y} />
+          <circle cx={edge.from.x} cy={edge.from.y} r={3} />
+          <circle cx={edge.to.x} cy={edge.to.y} r={3} />
+          <text x={(edge.from.x + edge.to.x) / 2 + 5} y={(edge.from.y + edge.to.y) / 2 - 5}>
+            parent-child
+          </text>
+        </g>
+      ))}
+      {[...props.layout.routingPlan.externalCorridorEdges.values()].map((edge) => (
+        <g key={`${edge.id}:external-corridor-debug`} className="layout-debug-external-corridor">
+          <line x1={edge.from.x} y1={edge.from.y} x2={edge.to.x} y2={edge.to.y} />
+        </g>
+      ))}
+      {[...props.layout.routingPlan.folderTrunks.values()].map((trunk) => {
+        const path = trunk.points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+        const active = selectedRoadId === trunk.id || selectedFolderId === trunk.providerFolderId || selectedFolderId === trunk.consumerFolderId;
+        const labelPoint = trunk.points[Math.floor(trunk.points.length / 2)] ?? trunk.points[0];
+        return (
+          <g key={`${trunk.id}:folder-trunk-debug`} className={`layout-debug-folder-trunk ${active ? "active" : ""}`}>
+            <path d={path} />
+            {labelPoint && (
+              <text x={labelPoint.x + 8} y={labelPoint.y - 8}>
+                {trunk.providerFolderId} to {trunk.consumerFolderId} ({trunk.dependencyCount})
+              </text>
+            )}
+          </g>
+        );
+      })}
+      {[...props.layout.routingPlan.externalJunctions.values()].map((junction) => (
+        <g key={`${junction.id}:external-junction-debug`} className="layout-debug-external-junction">
+          <circle cx={junction.x} cy={junction.y} r={4} />
+        </g>
+      ))}
+      {[...props.layout.routingPlan.streetJunctions.values()].map((junction) => (
+        <g key={`${junction.id}:junction-debug`} className="layout-debug-junction">
+          <circle cx={junction.x} cy={junction.y} r={5} />
+          <text x={junction.x + 7} y={junction.y - 7}>
+            junction
+          </text>
+        </g>
+      ))}
+      {gateways.map((gateway) => (
+        <g key={`${gateway.folderId}:${gateway.side}:gateway-debug`} className="layout-debug-gateway">
+          <circle cx={gateway.x} cy={gateway.y} r={7} />
+          <text x={gateway.x + 8} y={gateway.y - 8}>
+            gateway:{gateway.side}
+          </text>
+        </g>
+      ))}
+      {props.layout.buildingPorts.map((port) => (
+        <g key={`${port.fileId}:port-debug`} className="layout-debug-port">
+          <circle cx={port.x} cy={port.y} r={5} />
+          <text x={port.x + 6} y={port.y + 12}>
+            port:{port.side}
+          </text>
+        </g>
+      ))}
     </g>
   );
 }
@@ -793,8 +1110,10 @@ function FileBuildingShape(props: {
   onMouseLeave(): void;
 }): JSX.Element {
   const buildingUrl = assetUrl(buildingAssetForFileKind(props.file?.kind));
+  const buildingBounds = getVisibleBuildingBounds(props.node);
   const imageX = props.node.x + Math.round((props.node.width - MAP_SIZES.buildingWidth) / 2);
   const imageY = props.node.y + 4;
+  const roofY = props.node.y + VISIBLE_BUILDING_GEOMETRY.y;
 
   return (
     <g
@@ -807,8 +1126,8 @@ function FileBuildingShape(props: {
       aria-label={props.file ? `${props.file.name}, ${props.file.kind} file, ${props.file.metrics.importCount} imports, ${props.file.metrics.exportCount} exports` : props.node.label}
       tabIndex={0}
     >
-      <rect x={props.node.x + 16} y={props.node.y + 10} width={props.node.width - 32} height={MAP_SIZES.buildingHeight} rx="10" />
-      <path d={`M${props.node.x + 26},${props.node.y + 10} L${props.node.x + props.node.width / 2},${props.node.y + 2} L${props.node.x + props.node.width - 26},${props.node.y + 10}`} />
+      <rect x={buildingBounds.x} y={buildingBounds.y} width={buildingBounds.width} height={buildingBounds.height} rx="10" />
+      <path d={`M${props.node.x + VISIBLE_BUILDING_GEOMETRY.roofInsetX},${roofY} L${props.node.x + props.node.width / 2},${props.node.y + VISIBLE_BUILDING_GEOMETRY.roofPeakY} L${props.node.x + props.node.width - VISIBLE_BUILDING_GEOMETRY.roofInsetX},${roofY}`} />
       <OptionalSvgImage href={buildingUrl} x={imageX} y={imageY} width={MAP_SIZES.buildingWidth} height={MAP_SIZES.buildingHeight} className="building-image" preserveAspectRatio="xMidYMid meet" />
     </g>
   );

@@ -4,8 +4,9 @@ import { assetUrl, buildingAssetForFileKind, flattenAssetDefinitions, mapAssets 
 describe("map asset registry", () => {
   it("contains all required semantic asset groups", () => {
     expect(Object.keys(mapAssets.buildings).sort()).toEqual(["component", "controller", "entry", "generic", "index", "repository", "service", "test", "utility"]);
+    expect(Object.keys(mapAssets.folders).sort()).toEqual(["corner", "side", "sign", "support"]);
     expect(Object.keys(mapAssets.overlays).sort()).toEqual(["circularDependency", "created", "editPulse", "edited", "error", "readPulse", "selected"]);
-    expect(flattenAssetDefinitions().length).toBe(24);
+    expect(flattenAssetDefinitions().length).toBe(26);
   });
 
   it("falls back specialized buildings to the generic asset definition", () => {

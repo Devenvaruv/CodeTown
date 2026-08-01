@@ -2,7 +2,7 @@
 
 Codebase Town Visualizer is a VS Code extension that analyzes a JavaScript or TypeScript workspace and renders it as a deterministic 2D town map.
 
-Folders are towns, files are buildings, and local imports or re-exports are directed roads. The map is built from the active workspace, not static sample data.
+Folders are towns, files are buildings, and local imports or re-exports are provider-to-consumer roads over shared town infrastructure. The map is built from the active workspace, not static sample data.
 
 ## Features
 
@@ -13,6 +13,7 @@ Folders are towns, files are buildings, and local imports or re-exports are dire
 - Folder/file graph with reverse dependencies, metrics, unresolved-import diagnostics, and circular dependency marking
 - React webview with VS Code theme variables
 - SVG town renderer with deterministic grid layout
+- Canonical dependency routing with one file entrance, shared folder trunks, nested-folder connectors, and exact dependency routes
 - Expand/collapse folders, file selection, road selection, search, filters, zoom controls, details panel, and open-file action
 - Debounced refresh watcher for supported source and config changes
 
@@ -61,7 +62,9 @@ npm run typecheck
 
 ## Notes
 
-The MVP prioritizes readable structure over graph completeness. External packages are parsed and modeled but hidden by default. The first renderer uses SVG and deterministic grid placement; it does not use force-directed layout.
+The renderer prioritizes readable structure over drawing one independent line per import. `A -> B` means A provides code imported by B. External packages are parsed and modeled but hidden by default. The renderer uses SVG and deterministic grid placement; it does not use force-directed layout.
+
+See [docs/ROUTING_IMPLEMENTATION_COMPLETE.md](docs/ROUTING_IMPLEMENTATION_COMPLETE.md) for the routing model, validation rules, and debug mode.
 
 ## Visual Assets
 

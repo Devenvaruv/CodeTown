@@ -47,6 +47,10 @@ function createRoad(): LayoutRoad {
     dependencyCount: 1,
     participantFileIds: ["src/a.ts", "src/b.ts"],
     symbolCount: 1,
-    dependencyTypes: ["runtime"]
+    dependencyTypes: ["runtime"],
+    exactRouteIds: ["exact:src/a.ts::src/b.ts::runtime::1::0::b:b"],
+    infrastructureKind: "legacy-direct",
+    direction: "provider-to-consumer",
+    hasCircularDependency: false
   };
 }

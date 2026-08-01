@@ -1,4 +1,17 @@
 import type { FileNode, FolderNode, ImportConnection, ProjectGraph } from "../../shared/graphTypes";
+import {
+  buildRoutingPlan,
+  emptyRoutingPlan,
+  type BuildingPort,
+  type ExactDependencyRoute,
+  type ExternalCorridorEdge,
+  type FolderGateway,
+  type FolderTrunk,
+  type ParentChildConnectorEdge,
+  type RoutingPlan,
+  type RoutingPlanValidation,
+  type StreetEdge
+} from "./routingPlan";
 
 export type LayoutDirection = "RIGHT" | "DOWN";
 
@@ -37,7 +50,7 @@ export interface GraphEdge {
 }
 
 export type GatewaySide = "top" | "right" | "bottom" | "left";
-export type RoadRouteKind = "trunk" | "collector" | "branch" | "direct";
+export type RoadRouteKind = "trunk" | "spine" | "collector" | "branch" | "parent-child" | "direct";
 export type RoadEndpointRole = "provider" | "consumer";
 
 export interface GraphLayoutOptions {
@@ -108,6 +121,13 @@ export interface LayoutRoad extends RoutedGraphEdge {
   dependencyTypes: ImportConnection["type"][];
   sourceGateway?: FolderGateway;
   targetGateway?: FolderGateway;
+  sourceBuildingPort?: BuildingPort;
+  targetBuildingPort?: BuildingPort;
+  exactRouteIds: string[];
+  infrastructureKind: "spur" | "collector" | "spine" | "parent-child" | "external-trunk" | "legacy-direct";
+  direction: "provider-to-consumer" | "mixed";
+  showCountLabel?: boolean;
+  hasCircularDependency: boolean;
 }
 
 export interface TownLayout {
@@ -116,6 +136,9 @@ export interface TownLayout {
   folders: LayoutNode[];
   files: LayoutNode[];
   roads: LayoutRoad[];
+  buildingPorts: BuildingPort[];
+  folderGateways: FolderGateway[];
+  routingPlan: RoutingPlan;
   roadDebug: RoadDebugInfo;
   layoutWarnings: string[];
   usedFallbackLayout: boolean;
@@ -123,6 +146,65 @@ export interface TownLayout {
 
 export interface RoadDebugInfo {
   semanticFileDependencyCount: number;
+  visibleFileCount: number;
+  filePortCount: number;
+  filesWithInvalidMultipleEntrances: number;
+  filesWithZeroPorts: number;
+  filesWithMultiplePorts: number;
+  externallyConnectedFolderCount: number;
+  expandedFoldersNeedingStreetCount: number;
+  participatingFileCount: number;
+  foldersWithExternalDependenciesWithoutGateway: number;
+  foldersWithMultipleGateways: number;
+  internalStreetGraphCount: number;
+  foldersWithGatewayWithoutStreetGraph: number;
+  streetGraphsWithWrongGateway: number;
+  streetGraphsMissingGatewaySpine: number;
+  streetGraphsWithMultiplePrimarySpines: number;
+  filesWithMissingStreetSpur: number;
+  filesWithDuplicateStreetSpurs: number;
+  streetSpursMissingPorts: number;
+  streetEdgesWithDiagonalSegments: number;
+  streetEdgesOutsideFolderBounds: number;
+  streetEdgesIntersectingBuildings: number;
+  streetEdgesIntersectingLabels: number;
+  streetEdgesIntersectingNestedFolders: number;
+  streetJunctionCount: number;
+  childFoldersNeedingParentConnector: number;
+  parentChildConnectorCount: number;
+  childFoldersMissingParentConnector: number;
+  childFoldersWithDuplicateParentConnectors: number;
+  parentChildConnectorsWrongGateway: number;
+  parentChildConnectorsMissingParentJunction: number;
+  parentChildConnectorsBypassingChildGateway: number;
+  parentChildConnectorsBypassingParentStreetGraph: number;
+  parentChildConnectorsWithDiagonalSegments: number;
+  parentChildConnectorsOutsideParent: number;
+  parentChildConnectorsIntersectingBuildings: number;
+  parentChildConnectorsIntersectingLabels: number;
+  parentChildConnectorsIntersectingSiblingFolders: number;
+  parentChildConnectorsCrossingChildBoundary: number;
+  expectedFolderTrunkCount: number;
+  folderTrunkCount: number;
+  externalCorridorEdgeCount: number;
+  externalJunctionCount: number;
+  duplicateFolderTrunks: number;
+  folderTrunksWrongGateway: number;
+  folderTrunksAttachedToNestedFolder: number;
+  folderTrunksWithDiagonalSegments: number;
+  folderTrunksIntersectingFolders: number;
+  folderTrunksIntersectingBuildings: number;
+  folderTrunksIntersectingLabels: number;
+  duplicateExternalCorridorGeometry: number;
+  externalJunctionsMissingCorridorEdge: number;
+  semanticDependencyCount: number;
+  exactDependencyRouteCount: number;
+  exactRoutesWithDuplicateIds: number;
+  exactRoutesMissingBuildingPort: number;
+  exactRoutesMissingInfrastructure: number;
+  sameFolderRoutesUsingExternalTrunk: number;
+  crossTopLevelRoutesWithoutOneTrunk: number;
+  exactRoutesWithWrongEndpointPort: number;
   generatedFolderBundleCount: number;
   renderedTrunkCount: number;
   rejectedTrunkCount: number;
@@ -130,17 +212,15 @@ export interface RoadDebugInfo {
   diagonalSegmentCount: number;
   trunksIntersectingFolderBounds: number;
   trunksIntersectingBuildingBounds: number;
+  routesBypassingGateway: number;
+  routesBypassingSpineOrCollector: number;
+  buildingIntersectionCount: number;
+  labelIntersectionCount: number;
 }
 
 export interface TownLayoutOptions extends GraphLayoutOptions {
   visibleConnections?: ImportConnection[];
-}
-
-export interface FolderGateway {
-  folderId: string;
-  side: GatewaySide;
-  x: number;
-  y: number;
+  throwOnRoadPolicyViolation?: boolean;
 }
 
 export const GRID_LAYOUT_CONSTANTS = {
@@ -220,17 +300,26 @@ export async function buildTownLayout(graph: ProjectGraph, expandedFolderIds: Se
   const result = await layoutGraph(visibleGraph.nodes, [], options);
   const folders = result.nodes.filter((node): node is LayoutNode => node.kind === "folder");
   const files = result.nodes.filter((node): node is LayoutNode => node.kind === "file");
-  const trunkLayout = result.layoutWarnings.length > 0
-    ? { roads: [], debug: emptyRoadDebug(options.visibleConnections ?? graph.connections) }
-    : buildFolderTrunkRoads(result.nodes, graph, options.visibleConnections ?? graph.connections);
+  const routingPlan = result.layoutWarnings.length > 0
+    ? emptyRoutingPlan()
+    : buildRoutingPlan({
+      graph,
+      files,
+      folders,
+      connections: options.visibleConnections ?? graph.connections,
+      throwOnViolation: options.throwOnRoadPolicyViolation ?? isDevelopmentRuntime()
+    });
 
   return {
     width: Math.max(result.width, 860),
     height: Math.max(result.height, 640),
     folders,
     files,
-    roads: trunkLayout.roads,
-    roadDebug: trunkLayout.debug,
+    roads: roadsFromRoutingPlan(routingPlan, options.visibleConnections ?? graph.connections),
+    buildingPorts: [...routingPlan.buildingPorts.values()].sort((a, b) => a.fileId.localeCompare(b.fileId)),
+    folderGateways: [...routingPlan.folderGateways.values()].sort((a, b) => a.folderId.localeCompare(b.folderId)),
+    routingPlan,
+    roadDebug: roadDebugFromRoutingPlan(options.visibleConnections ?? graph.connections, routingPlan.validation),
     layoutWarnings: result.layoutWarnings,
     usedFallbackLayout: result.usedFallbackLayout
   };
@@ -692,6 +781,284 @@ function layoutResult(nodes: PositionedGraphNode[], edges: RoutedGraphEdge[], la
   };
 }
 
+function roadsFromRoutingPlan(routingPlan: RoutingPlan, connections: ImportConnection[]): LayoutRoad[] {
+  const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+  const routesByInfrastructureRef = new Map<string, ExactDependencyRoute[]>();
+  for (const route of routingPlan.exactDependencyRoutes) {
+    for (const ref of route.infrastructureRefs) {
+      const key = infrastructureRefKey(ref);
+      const existingRoutes = routesByInfrastructureRef.get(key) ?? [];
+      if (!existingRoutes.some((existingRoute) => existingRoute.id === route.id)) {
+        routesByInfrastructureRef.set(key, [...existingRoutes, route]);
+      }
+    }
+  }
+
+  const roads: LayoutRoad[] = [];
+  for (const graph of [...routingPlan.internalStreetGraphs.values()].sort((a, b) => a.folderId.localeCompare(b.folderId))) {
+    for (const edge of graph.edges) {
+      const routes = routesByInfrastructureRef.get(`internal-street-edge:${edge.folderId}:${edge.id}`) ?? [];
+      if (routes.length > 0) {
+        roads.push(layoutRoadFromStreetEdge(edge, routes, connectionById));
+      }
+    }
+  }
+
+  for (const connector of [...routingPlan.parentChildConnectors.values()].sort((a, b) => a.id.localeCompare(b.id))) {
+    for (const edge of connector.edges) {
+      const routes = routesByInfrastructureRef.get(`parent-child-connector-edge:${connector.id}:${edge.id}`) ?? [];
+      if (routes.length > 0) {
+        roads.push(layoutRoadFromParentChildConnectorEdge(edge, routes, connectionById));
+      }
+    }
+  }
+
+  const trunkBadgeEdgeIds = longestBadgeEdgeIdsByTrunk(routingPlan);
+  const trunkIdsByExternalEdgeId = trunkIdsByCorridorEdge(routingPlan);
+  for (const edge of [...routingPlan.externalCorridorEdges.values()].sort((a, b) => a.id.localeCompare(b.id))) {
+    const routes = routesByInfrastructureRef.get(`external-corridor-edge:${edge.id}`) ?? [];
+    const trunkIds = trunkIdsByExternalEdgeId.get(edge.id) ?? [];
+    if (routes.length > 0 || trunkIds.length > 0) {
+      roads.push(layoutRoadFromExternalCorridorEdge(edge, routes, routingPlan, connectionById, trunkBadgeEdgeIds.has(edge.id), trunkIds));
+    }
+  }
+
+  return roads.sort((a, b) => roadKindOrder(a.routeKind) - roadKindOrder(b.routeKind) || a.id.localeCompare(b.id));
+}
+
+function layoutRoadFromStreetEdge(edge: StreetEdge, routes: ExactDependencyRoute[], connectionById: Map<string, ImportConnection>): LayoutRoad {
+  const routeKind = edge.kind === "spur" ? "branch" : edge.kind;
+  return createCanonicalLayoutRoad({
+    id: `road:${edge.id}`,
+    routeKind,
+    infrastructureKind: edge.kind === "spur" ? "spur" : edge.kind,
+    sourceId: edge.folderId,
+    targetId: edge.folderId,
+    providerFolderId: representativeProviderFolderId(routes),
+    consumerFolderId: representativeConsumerFolderId(routes),
+    points: [edge.from, edge.to],
+    routes,
+    connectionById,
+    showCountLabel: false
+  });
+}
+
+function layoutRoadFromParentChildConnectorEdge(edge: ParentChildConnectorEdge, routes: ExactDependencyRoute[], connectionById: Map<string, ImportConnection>): LayoutRoad {
+  return createCanonicalLayoutRoad({
+    id: `road:${edge.id}`,
+    routeKind: "parent-child",
+    infrastructureKind: "parent-child",
+    sourceId: edge.parentFolderId,
+    targetId: edge.childFolderId,
+    providerFolderId: representativeProviderFolderId(routes),
+    consumerFolderId: representativeConsumerFolderId(routes),
+    points: [edge.from, edge.to],
+    routes,
+    connectionById,
+    showCountLabel: false
+  });
+}
+
+function layoutRoadFromExternalCorridorEdge(
+  edge: ExternalCorridorEdge,
+  routes: ExactDependencyRoute[],
+  routingPlan: RoutingPlan,
+  connectionById: Map<string, ImportConnection>,
+  showCountLabel: boolean,
+  fallbackTrunkIds: string[]
+): LayoutRoad {
+  const routeTrunkIds = routes.map((route) => route.trunkId).filter((trunkId): trunkId is string => Boolean(trunkId));
+  const trunkIds = routeTrunkIds.length > 0 ? routeTrunkIds : fallbackTrunkIds;
+  const trunks = [...new Set(trunkIds)]
+    .map((trunkId) => routingPlan.folderTrunks.get(trunkId))
+    .filter((trunk): trunk is FolderTrunk => Boolean(trunk));
+  const orientedSegments = trunks
+    .filter((trunk): trunk is FolderTrunk => Boolean(trunk))
+    .map((trunk) => orientedSegmentForEdge(trunk.points, edge));
+  const firstSegment = orientedSegments.find((segment): segment is { from: Point; to: Point } => Boolean(segment));
+  const isMixed = orientedSegments.some((segment) => segment && firstSegment && (!samePoint(segment.from, firstSegment.from) || !samePoint(segment.to, firstSegment.to)));
+  if (routes.length === 0) {
+    return createTrunkOnlyLayoutRoad({
+      id: `road:${edge.id}`,
+      points: firstSegment ? [firstSegment.from, firstSegment.to] : [edge.from, edge.to],
+      trunks,
+      connectionById,
+      direction: isMixed ? "mixed" : "provider-to-consumer",
+      showCountLabel
+    });
+  }
+  return createCanonicalLayoutRoad({
+    id: `road:${edge.id}`,
+    routeKind: "trunk",
+    infrastructureKind: "external-trunk",
+    sourceId: representativeProviderFolderId(routes),
+    targetId: representativeConsumerFolderId(routes),
+    providerFolderId: representativeProviderFolderId(routes),
+    consumerFolderId: representativeConsumerFolderId(routes),
+    points: firstSegment ? [firstSegment.from, firstSegment.to] : [edge.from, edge.to],
+    routes,
+    connectionById,
+    direction: isMixed ? "mixed" : "provider-to-consumer",
+    showCountLabel
+  });
+}
+
+function createTrunkOnlyLayoutRoad(input: {
+  id: string;
+  points: Point[];
+  trunks: FolderTrunk[];
+  connectionById: Map<string, ImportConnection>;
+  direction: LayoutRoad["direction"];
+  showCountLabel: boolean;
+}): LayoutRoad {
+  const sortedTrunks = [...input.trunks].sort((a, b) => a.id.localeCompare(b.id));
+  const connectionIds = [...new Set(sortedTrunks.flatMap((trunk) => trunk.dependencyIds))].sort();
+  const connections = connectionIds.map((id) => input.connectionById.get(id)).filter((connection): connection is ImportConnection => Boolean(connection));
+  const sections = [{ startPoint: input.points[0]!, bendPoints: input.points.slice(1, -1), endPoint: input.points.at(-1)! }];
+  return {
+    id: input.id,
+    connectionId: connectionIds[0] ?? input.id,
+    connectionIds,
+    sourceId: sortedTrunks[0]?.providerFolderId ?? "",
+    targetId: sortedTrunks[0]?.consumerFolderId ?? "",
+    level: "folder",
+    isAggregated: connectionIds.length > 1,
+    dependencyCount: connectionIds.length,
+    routeKind: "trunk",
+    trunkId: sortedTrunks[0]?.id,
+    providerFolderId: sortedTrunks[0]?.providerFolderId,
+    consumerFolderId: sortedTrunks[0]?.consumerFolderId,
+    participantFileIds: [...new Set(sortedTrunks.flatMap((trunk) => [...trunk.providerFileIds, ...trunk.consumerFileIds]))].sort(),
+    symbolCount: sortedTrunks.reduce((total, trunk) => total + trunk.symbolCount, 0),
+    dependencyTypes: [...new Set(sortedTrunks.flatMap((trunk) => trunk.dependencyTypes))].sort(),
+    exactRouteIds: [],
+    infrastructureKind: "external-trunk",
+    direction: input.direction,
+    showCountLabel: input.showCountLabel,
+    hasCircularDependency: connections.some((connection) => connection.isCircular),
+    sections,
+    points: input.points
+  };
+}
+
+function createCanonicalLayoutRoad(input: {
+  id: string;
+  routeKind: Exclude<RoadRouteKind, "direct">;
+  infrastructureKind: LayoutRoad["infrastructureKind"];
+  sourceId: string;
+  targetId: string;
+  providerFolderId: string;
+  consumerFolderId: string;
+  points: Point[];
+  routes: ExactDependencyRoute[];
+  connectionById: Map<string, ImportConnection>;
+  direction?: LayoutRoad["direction"];
+  showCountLabel: boolean;
+}): LayoutRoad {
+  const sortedRoutes = [...input.routes].sort((a, b) => a.id.localeCompare(b.id));
+  const connectionIds = [...new Set(sortedRoutes.map((route) => route.connectionId))].sort();
+  const connections = connectionIds.map((id) => input.connectionById.get(id)).filter((connection): connection is ImportConnection => Boolean(connection));
+  const sections = [{ startPoint: input.points[0]!, bendPoints: input.points.slice(1, -1), endPoint: input.points.at(-1)! }];
+  return {
+    id: input.id,
+    connectionId: connectionIds[0] ?? input.id,
+    connectionIds,
+    sourceId: input.sourceId,
+    targetId: input.targetId,
+    level: input.routeKind === "trunk" || input.routeKind === "parent-child" ? "folder" : "file",
+    isAggregated: sortedRoutes.length > 1,
+    dependencyCount: sortedRoutes.length,
+    routeKind: input.routeKind,
+    trunkId: sortedRoutes.find((route) => route.trunkId)?.trunkId,
+    providerFolderId: input.providerFolderId,
+    consumerFolderId: input.consumerFolderId,
+    participantFileIds: [...new Set(sortedRoutes.flatMap((route) => [route.providerFileId, route.consumerFileId]))].sort(),
+    symbolCount: sortedRoutes.reduce((total, route) => total + route.symbols.length, 0),
+    dependencyTypes: [...new Set(sortedRoutes.map((route) => route.dependencyKind))].sort(),
+    exactRouteIds: sortedRoutes.map((route) => route.id),
+    infrastructureKind: input.infrastructureKind,
+    direction: input.direction ?? "provider-to-consumer",
+    showCountLabel: input.showCountLabel,
+    hasCircularDependency: connections.some((connection) => connection.isCircular),
+    sections,
+    points: input.points
+  };
+}
+
+function infrastructureRefKey(ref: ExactDependencyRoute["infrastructureRefs"][number]): string {
+  switch (ref.kind) {
+    case "internal-street-edge":
+      return `${ref.kind}:${ref.folderId}:${ref.edgeId}`;
+    case "parent-child-connector-edge":
+      return `${ref.kind}:${ref.connectorId}:${ref.edgeId}`;
+    case "external-corridor-edge":
+      return `${ref.kind}:${ref.edgeId}`;
+  }
+}
+
+function representativeProviderFolderId(routes: ExactDependencyRoute[]): string {
+  return routes[0]?.providerTopLevelFolderId ?? routes[0]?.providerFolderId ?? "";
+}
+
+function representativeConsumerFolderId(routes: ExactDependencyRoute[]): string {
+  return routes[0]?.consumerTopLevelFolderId ?? routes[0]?.consumerFolderId ?? "";
+}
+
+function orientedSegmentForEdge(points: Point[], edge: ExternalCorridorEdge): { from: Point; to: Point } | undefined {
+  for (let index = 1; index < points.length; index += 1) {
+    const from = points[index - 1]!;
+    const to = points[index]!;
+    if ((samePoint(from, edge.from) && samePoint(to, edge.to)) || (samePoint(from, edge.to) && samePoint(to, edge.from))) {
+      return { from, to };
+    }
+  }
+  return undefined;
+}
+
+function longestBadgeEdgeIdsByTrunk(routingPlan: RoutingPlan): Set<string> {
+  const edgeIds = new Set<string>();
+  for (const trunk of routingPlan.folderTrunks.values()) {
+    const longest = trunk.edgeIds
+      .map((edgeId) => {
+        const edge = routingPlan.externalCorridorEdges.get(edgeId);
+        return edge ? { edgeId, length: Math.abs(edge.to.x - edge.from.x) + Math.abs(edge.to.y - edge.from.y) } : undefined;
+      })
+      .filter((entry): entry is { edgeId: string; length: number } => Boolean(entry))
+      .sort((a, b) => b.length - a.length || a.edgeId.localeCompare(b.edgeId))[0];
+    if (longest) {
+      edgeIds.add(longest.edgeId);
+    }
+  }
+  return edgeIds;
+}
+
+function trunkIdsByCorridorEdge(routingPlan: RoutingPlan): Map<string, string[]> {
+  const trunkIdsByEdgeId = new Map<string, string[]>();
+  for (const trunk of routingPlan.folderTrunks.values()) {
+    for (const edgeId of trunk.edgeIds) {
+      trunkIdsByEdgeId.set(edgeId, [...(trunkIdsByEdgeId.get(edgeId) ?? []), trunk.id].sort());
+    }
+  }
+  return trunkIdsByEdgeId;
+}
+
+function roadKindOrder(kind: RoadRouteKind): number {
+  switch (kind) {
+    case "trunk":
+      return 0;
+    case "spine":
+      return 1;
+    case "collector":
+      return 2;
+    case "parent-child":
+      return 3;
+    case "branch":
+      return 4;
+    case "direct":
+      return 5;
+  }
+}
+
 function fallbackWidth(node: GraphNode): number {
   if (node.kind === "file") {
     return GRID_LAYOUT_CONSTANTS.fileWidth;
@@ -722,7 +1089,30 @@ interface FolderDependencyBundle {
   dependencies: RenderDependency[];
 }
 
-function buildFolderTrunkRoads(nodes: PositionedGraphNode[], graph: ProjectGraph, connections: ImportConnection[]): { roads: LayoutRoad[]; debug: RoadDebugInfo } {
+interface FolderStreetPlan {
+  folderId: string;
+  files: PositionedGraphNode[];
+  collectorsByFileId: Map<string, StreetCollector>;
+  portsByFileId: Map<string, BuildingPort>;
+}
+
+interface StreetCollector {
+  id: string;
+  x: number;
+  fileIds: string[];
+}
+
+interface EndpointStreetRoute {
+  file: PositionedGraphNode;
+  port: BuildingPort;
+  spinePath: Point[];
+  collectorPath: Point[];
+  spurPath: Point[];
+}
+
+// Legacy route-first road builder. It remains for historical tests and later deletion,
+// but buildTownLayout() no longer calls it while internal street graphs are staged.
+export function buildFolderTrunkRoads(nodes: PositionedGraphNode[], graph: ProjectGraph, connections: ImportConnection[], throwOnRoadPolicyViolation: boolean): { roads: LayoutRoad[]; buildingPorts: BuildingPort[]; debug: RoadDebugInfo } {
   const nodeRects = new Map(nodes.map((node) => [node.id, node]));
   const folderRects = nodes.filter((node) => node.kind === "folder");
   const fileRects = nodes.filter((node) => node.kind === "file");
@@ -733,7 +1123,8 @@ function buildFolderTrunkRoads(nodes: PositionedGraphNode[], graph: ProjectGraph
   const duplicateConnectionIds = new Set<string>();
   const debug: RoadDebugInfo = {
     ...emptyRoadDebug(connections),
-    semanticFileDependencyCount: connections.filter((connection) => Boolean(connection.targetFileId)).length
+    semanticFileDependencyCount: connections.filter((connection) => Boolean(connection.targetFileId)).length,
+    visibleFileCount: fileRects.length
   };
 
   for (const connection of connections) {
@@ -765,6 +1156,16 @@ function buildFolderTrunkRoads(nodes: PositionedGraphNode[], graph: ProjectGraph
   debug.generatedFolderBundleCount = bundles.size;
   debug.duplicateBundleCount = duplicateConnectionIds.size;
   const roads: LayoutRoad[] = [];
+  const streetPlans = buildFolderStreetPlans(folderRects, fileRects);
+  const buildingPorts = new Map<string, BuildingPort>();
+  for (const plan of streetPlans.values()) {
+    for (const [fileId, port] of plan.portsByFileId) {
+      buildingPorts.set(fileId, port);
+    }
+  }
+  for (const file of fileRects.filter((node) => !buildingPorts.has(node.id)).sort(comparePositionedNodes)) {
+    buildingPorts.set(file.id, buildingPortForSide(file, "left"));
+  }
   const renderedBundleKeys = new Set<string>();
 
   for (const bundle of [...bundles.values()].sort(compareBundles)) {
@@ -815,16 +1216,19 @@ function buildFolderTrunkRoads(nodes: PositionedGraphNode[], graph: ProjectGraph
       targetGateway,
       isAggregated: true
     }));
+    roads.push(...buildLocalRoadsForBundle(bundle, trunkId, providerFolder, consumerFolder, sourceGateway, targetGateway, nodeRects, buildingPorts, streetPlans));
     renderedBundleKeys.add(key);
   }
 
-  debug.renderedTrunkCount = roads.length;
+  debug.renderedTrunkCount = roads.filter((road) => road.routeKind === "trunk").length;
   if (debug.renderedTrunkCount > debug.generatedFolderBundleCount) {
     debug.duplicateBundleCount += debug.renderedTrunkCount - debug.generatedFolderBundleCount;
   }
+  Object.assign(debug, validateRoadSystem(roads, fileRects, buildingPorts, throwOnRoadPolicyViolation));
 
   return {
     roads: roads.sort((a, b) => routeKindOrder(a.routeKind) - routeKindOrder(b.routeKind) || a.id.localeCompare(b.id)),
+    buildingPorts: [...buildingPorts.values()].sort((a, b) => a.fileId.localeCompare(b.fileId)),
     debug
   };
 }
@@ -862,6 +1266,156 @@ function addBundleDependency(
   bundles.set(key, existing);
 }
 
+function buildLocalRoadsForBundle(
+  bundle: FolderDependencyBundle,
+  trunkId: string,
+  providerFolder: PositionedGraphNode,
+  consumerFolder: PositionedGraphNode,
+  providerGateway: FolderGateway,
+  consumerGateway: FolderGateway,
+  nodeRects: Map<string, PositionedGraphNode>,
+  buildingPorts: Map<string, BuildingPort>,
+  streetPlans: Map<string, FolderStreetPlan>
+): LayoutRoad[] {
+  return [
+    ...buildLocalRoadsForEndpoint({
+      bundle,
+      trunkId,
+      folder: providerFolder,
+      gateway: providerGateway,
+      endpointRole: "provider",
+      fileIds: uniqueDefined(bundle.dependencies.map((dependency) => dependency.providerFileId)).sort(),
+      nodeRects,
+      buildingPorts,
+      streetPlans
+    }),
+    ...buildLocalRoadsForEndpoint({
+      bundle,
+      trunkId,
+      folder: consumerFolder,
+      gateway: consumerGateway,
+      endpointRole: "consumer",
+      fileIds: uniqueDefined(bundle.dependencies.map((dependency) => dependency.consumerFileId)).sort(),
+      nodeRects,
+      buildingPorts,
+      streetPlans
+    })
+  ];
+}
+
+function buildLocalRoadsForEndpoint(input: {
+  bundle: FolderDependencyBundle;
+  trunkId: string;
+  folder: PositionedGraphNode;
+  gateway: FolderGateway;
+  endpointRole: RoadEndpointRole;
+  fileIds: string[];
+  nodeRects: Map<string, PositionedGraphNode>;
+  buildingPorts: Map<string, BuildingPort>;
+  streetPlans: Map<string, FolderStreetPlan>;
+}): LayoutRoad[] {
+  const files = input.fileIds
+    .map((fileId) => input.nodeRects.get(fileId))
+    .filter((node): node is PositionedGraphNode => node !== undefined && node.kind === "file");
+  if (files.length === 0) {
+    return [];
+  }
+
+  const plan = input.streetPlans.get(input.folder.id);
+  if (!plan) {
+    return [];
+  }
+
+  const routes = files
+    .map((file) => buildEndpointStreetRoute(input.folder, input.gateway, plan, file))
+    .filter((route): route is EndpointStreetRoute => route !== undefined)
+    .sort((a, b) => a.file.id.localeCompare(b.file.id));
+  if (routes.length === 0) {
+    return [];
+  }
+
+  const roads: LayoutRoad[] = [];
+
+  const spinePath = mergeSpinePath(input.gateway, routes.map((route) => route.spinePath), input.endpointRole);
+  if (spinePath.length > 1) {
+    roads.push(createLayoutRoad({
+      id: `spine:${input.endpointRole}:${input.trunkId}:${input.folder.id}`,
+      sourceId: input.endpointRole === "provider" ? input.folder.id : input.bundle.providerFolderId,
+      targetId: input.endpointRole === "provider" ? input.bundle.consumerFolderId : input.folder.id,
+      level: "file",
+      routeKind: "spine",
+      endpointRole: input.endpointRole,
+      trunkId: input.trunkId,
+      providerFolderId: input.bundle.providerFolderId,
+      consumerFolderId: input.bundle.consumerFolderId,
+      dependencies: input.bundle.dependencies.filter((dependency) => input.endpointRole === "provider" ? dependency.providerFileId : dependency.consumerFileId),
+      points: spinePath,
+      sourceGateway: input.gateway,
+      targetGateway: input.gateway,
+      isAggregated: true
+    }));
+  }
+
+  const routesByCollector = groupBy(routes, (route) => plan.collectorsByFileId.get(route.file.id)?.id ?? route.file.id);
+  for (const [collectorId, collectorRoutes] of [...routesByCollector.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const collectorPath = mergeCollectorPath(collectorRoutes.map((route) => route.collectorPath), input.endpointRole);
+    if (collectorPath.length < 2) {
+      continue;
+    }
+    const dependencies = input.bundle.dependencies.filter((dependency) => {
+      const fileIds = new Set(collectorRoutes.map((route) => route.file.id));
+      return input.endpointRole === "provider"
+        ? Boolean(dependency.providerFileId && fileIds.has(dependency.providerFileId))
+        : Boolean(dependency.consumerFileId && fileIds.has(dependency.consumerFileId));
+    });
+    roads.push(createLayoutRoad({
+      id: `collector:${input.endpointRole}:${input.trunkId}:${collectorId}`,
+      sourceId: input.endpointRole === "provider" ? input.folder.id : input.bundle.providerFolderId,
+      targetId: input.endpointRole === "provider" ? input.bundle.consumerFolderId : input.folder.id,
+      level: "file",
+      routeKind: "collector",
+      endpointRole: input.endpointRole,
+      trunkId: input.trunkId,
+      providerFolderId: input.bundle.providerFolderId,
+      consumerFolderId: input.bundle.consumerFolderId,
+      dependencies,
+      points: collectorPath,
+      sourceGateway: input.gateway,
+      targetGateway: input.gateway,
+      isAggregated: dependencies.length > 1
+    }));
+  }
+
+  for (const route of routes) {
+    const port = input.buildingPorts.get(route.file.id);
+    if (!port || !samePoint(port, route.port)) {
+      continue;
+    }
+    const dependencies = input.bundle.dependencies.filter((dependency) => input.endpointRole === "provider" ? dependency.providerFileId === route.file.id : dependency.consumerFileId === route.file.id);
+    const points = orientLocalPath(route.spurPath, input.endpointRole);
+    roads.push(createLayoutRoad({
+      id: `branch:${input.endpointRole}:${input.trunkId}:${route.file.id}`,
+      sourceId: input.endpointRole === "provider" ? route.file.id : input.folder.id,
+      targetId: input.endpointRole === "provider" ? input.folder.id : route.file.id,
+      level: "file",
+      routeKind: "branch",
+      endpointRole: input.endpointRole,
+      trunkId: input.trunkId,
+      providerFolderId: input.bundle.providerFolderId,
+      consumerFolderId: input.bundle.consumerFolderId,
+      dependencies,
+      points,
+      sourceGateway: input.gateway,
+      targetGateway: input.gateway,
+      sourceBuildingPort: input.endpointRole === "provider" ? route.port : undefined,
+      targetBuildingPort: input.endpointRole === "consumer" ? route.port : undefined,
+      isAggregated: dependencies.length > 1
+    }));
+  }
+
+  return roads;
+}
+
 function createLayoutRoad(input: {
   id: string;
   sourceId: string;
@@ -876,6 +1430,8 @@ function createLayoutRoad(input: {
   points: Point[];
   sourceGateway?: FolderGateway;
   targetGateway?: FolderGateway;
+  sourceBuildingPort?: BuildingPort;
+  targetBuildingPort?: BuildingPort;
   isAggregated: boolean;
 }): LayoutRoad {
   const connectionIds = unique(input.dependencies.map((dependency) => dependency.id)).sort();
@@ -900,6 +1456,12 @@ function createLayoutRoad(input: {
     participantFileIds,
     sourceGateway: input.sourceGateway,
     targetGateway: input.targetGateway,
+    sourceBuildingPort: input.sourceBuildingPort,
+    targetBuildingPort: input.targetBuildingPort,
+    exactRouteIds: [],
+    infrastructureKind: input.routeKind === "branch" ? "spur" : input.routeKind === "trunk" ? "external-trunk" : input.routeKind === "direct" ? "legacy-direct" : input.routeKind,
+    direction: "provider-to-consumer",
+    hasCircularDependency: false,
     isAggregated: input.isAggregated,
     sections,
     points: sections.flatMap((section) => [section.startPoint, ...section.bendPoints, section.endPoint])
@@ -909,14 +1471,360 @@ function createLayoutRoad(input: {
 function emptyRoadDebug(connections: ImportConnection[]): RoadDebugInfo {
   return {
     semanticFileDependencyCount: connections.filter((connection) => Boolean(connection.targetFileId)).length,
+    visibleFileCount: 0,
+    filePortCount: 0,
+    filesWithInvalidMultipleEntrances: 0,
+    filesWithZeroPorts: 0,
+    filesWithMultiplePorts: 0,
+    externallyConnectedFolderCount: 0,
+    expandedFoldersNeedingStreetCount: 0,
+    participatingFileCount: 0,
+    foldersWithExternalDependenciesWithoutGateway: 0,
+    foldersWithMultipleGateways: 0,
+    internalStreetGraphCount: 0,
+    foldersWithGatewayWithoutStreetGraph: 0,
+    streetGraphsWithWrongGateway: 0,
+    streetGraphsMissingGatewaySpine: 0,
+    streetGraphsWithMultiplePrimarySpines: 0,
+    filesWithMissingStreetSpur: 0,
+    filesWithDuplicateStreetSpurs: 0,
+    streetSpursMissingPorts: 0,
+    streetEdgesWithDiagonalSegments: 0,
+    streetEdgesOutsideFolderBounds: 0,
+    streetEdgesIntersectingBuildings: 0,
+    streetEdgesIntersectingLabels: 0,
+    streetEdgesIntersectingNestedFolders: 0,
+    streetJunctionCount: 0,
+    childFoldersNeedingParentConnector: 0,
+    parentChildConnectorCount: 0,
+    childFoldersMissingParentConnector: 0,
+    childFoldersWithDuplicateParentConnectors: 0,
+    parentChildConnectorsWrongGateway: 0,
+    parentChildConnectorsMissingParentJunction: 0,
+    parentChildConnectorsBypassingChildGateway: 0,
+    parentChildConnectorsBypassingParentStreetGraph: 0,
+    parentChildConnectorsWithDiagonalSegments: 0,
+    parentChildConnectorsOutsideParent: 0,
+    parentChildConnectorsIntersectingBuildings: 0,
+    parentChildConnectorsIntersectingLabels: 0,
+    parentChildConnectorsIntersectingSiblingFolders: 0,
+    parentChildConnectorsCrossingChildBoundary: 0,
+    expectedFolderTrunkCount: 0,
+    folderTrunkCount: 0,
+    externalCorridorEdgeCount: 0,
+    externalJunctionCount: 0,
+    duplicateFolderTrunks: 0,
+    folderTrunksWrongGateway: 0,
+    folderTrunksAttachedToNestedFolder: 0,
+    folderTrunksWithDiagonalSegments: 0,
+    folderTrunksIntersectingFolders: 0,
+    folderTrunksIntersectingBuildings: 0,
+    folderTrunksIntersectingLabels: 0,
+    duplicateExternalCorridorGeometry: 0,
+    externalJunctionsMissingCorridorEdge: 0,
+    semanticDependencyCount: 0,
+    exactDependencyRouteCount: 0,
+    exactRoutesWithDuplicateIds: 0,
+    exactRoutesMissingBuildingPort: 0,
+    exactRoutesMissingInfrastructure: 0,
+    sameFolderRoutesUsingExternalTrunk: 0,
+    crossTopLevelRoutesWithoutOneTrunk: 0,
+    exactRoutesWithWrongEndpointPort: 0,
     generatedFolderBundleCount: 0,
     renderedTrunkCount: 0,
     rejectedTrunkCount: 0,
     duplicateBundleCount: 0,
     diagonalSegmentCount: 0,
     trunksIntersectingFolderBounds: 0,
-    trunksIntersectingBuildingBounds: 0
+    trunksIntersectingBuildingBounds: 0,
+    routesBypassingGateway: 0,
+    routesBypassingSpineOrCollector: 0,
+    buildingIntersectionCount: 0,
+    labelIntersectionCount: 0
   };
+}
+
+function roadDebugFromRoutingPlan(connections: ImportConnection[], validation: RoutingPlanValidation): RoadDebugInfo {
+  return {
+    ...emptyRoadDebug(connections),
+    visibleFileCount: validation.visibleFileCount,
+    filePortCount: validation.buildingPortCount,
+    filesWithInvalidMultipleEntrances: validation.filesWithZeroPorts + validation.filesWithMultiplePorts,
+    filesWithZeroPorts: validation.filesWithZeroPorts,
+    filesWithMultiplePorts: validation.filesWithMultiplePorts,
+    externallyConnectedFolderCount: validation.externallyConnectedFolderCount,
+    expandedFoldersNeedingStreetCount: validation.expandedFoldersNeedingStreetCount,
+    participatingFileCount: validation.participatingFileCount,
+    foldersWithExternalDependenciesWithoutGateway: validation.foldersWithExternalDependenciesWithoutGateway,
+    foldersWithMultipleGateways: validation.foldersWithMultipleGateways,
+    internalStreetGraphCount: validation.internalStreetGraphCount,
+    foldersWithGatewayWithoutStreetGraph: validation.foldersWithGatewayWithoutStreetGraph,
+    streetGraphsWithWrongGateway: validation.streetGraphsWithWrongGateway,
+    streetGraphsMissingGatewaySpine: validation.streetGraphsMissingGatewaySpine,
+    streetGraphsWithMultiplePrimarySpines: validation.streetGraphsWithMultiplePrimarySpines,
+    filesWithMissingStreetSpur: validation.filesWithMissingStreetSpur,
+    filesWithDuplicateStreetSpurs: validation.filesWithDuplicateStreetSpurs,
+    streetSpursMissingPorts: validation.streetSpursMissingPorts,
+    streetEdgesWithDiagonalSegments: validation.streetEdgesWithDiagonalSegments,
+    streetEdgesOutsideFolderBounds: validation.streetEdgesOutsideFolderBounds,
+    streetEdgesIntersectingBuildings: validation.streetEdgesIntersectingBuildings,
+    streetEdgesIntersectingLabels: validation.streetEdgesIntersectingLabels,
+    streetEdgesIntersectingNestedFolders: validation.streetEdgesIntersectingNestedFolders,
+    streetJunctionCount: validation.streetJunctionCount,
+    childFoldersNeedingParentConnector: validation.childFoldersNeedingParentConnector,
+    parentChildConnectorCount: validation.parentChildConnectorCount,
+    childFoldersMissingParentConnector: validation.childFoldersMissingParentConnector,
+    childFoldersWithDuplicateParentConnectors: validation.childFoldersWithDuplicateParentConnectors,
+    parentChildConnectorsWrongGateway: validation.parentChildConnectorsWrongGateway,
+    parentChildConnectorsMissingParentJunction: validation.parentChildConnectorsMissingParentJunction,
+    parentChildConnectorsBypassingChildGateway: validation.parentChildConnectorsBypassingChildGateway,
+    parentChildConnectorsBypassingParentStreetGraph: validation.parentChildConnectorsBypassingParentStreetGraph,
+    parentChildConnectorsWithDiagonalSegments: validation.parentChildConnectorsWithDiagonalSegments,
+    parentChildConnectorsOutsideParent: validation.parentChildConnectorsOutsideParent,
+    parentChildConnectorsIntersectingBuildings: validation.parentChildConnectorsIntersectingBuildings,
+    parentChildConnectorsIntersectingLabels: validation.parentChildConnectorsIntersectingLabels,
+    parentChildConnectorsIntersectingSiblingFolders: validation.parentChildConnectorsIntersectingSiblingFolders,
+    parentChildConnectorsCrossingChildBoundary: validation.parentChildConnectorsCrossingChildBoundary,
+    expectedFolderTrunkCount: validation.expectedFolderTrunkCount,
+    folderTrunkCount: validation.folderTrunkCount,
+    externalCorridorEdgeCount: validation.externalCorridorEdgeCount,
+    externalJunctionCount: validation.externalJunctionCount,
+    duplicateFolderTrunks: validation.duplicateFolderTrunks,
+    folderTrunksWrongGateway: validation.folderTrunksWrongGateway,
+    folderTrunksAttachedToNestedFolder: validation.folderTrunksAttachedToNestedFolder,
+    folderTrunksWithDiagonalSegments: validation.folderTrunksWithDiagonalSegments,
+    folderTrunksIntersectingFolders: validation.folderTrunksIntersectingFolders,
+    folderTrunksIntersectingBuildings: validation.folderTrunksIntersectingBuildings,
+    folderTrunksIntersectingLabels: validation.folderTrunksIntersectingLabels,
+    duplicateExternalCorridorGeometry: validation.duplicateExternalCorridorGeometry,
+    externalJunctionsMissingCorridorEdge: validation.externalJunctionsMissingCorridorEdge,
+    semanticDependencyCount: validation.semanticDependencyCount,
+    exactDependencyRouteCount: validation.exactDependencyRouteCount,
+    exactRoutesWithDuplicateIds: validation.exactRoutesWithDuplicateIds,
+    exactRoutesMissingBuildingPort: validation.exactRoutesMissingBuildingPort,
+    exactRoutesMissingInfrastructure: validation.exactRoutesMissingInfrastructure,
+    sameFolderRoutesUsingExternalTrunk: validation.sameFolderRoutesUsingExternalTrunk,
+    crossTopLevelRoutesWithoutOneTrunk: validation.crossTopLevelRoutesWithoutOneTrunk,
+    exactRoutesWithWrongEndpointPort: validation.exactRoutesWithWrongEndpointPort
+  };
+}
+
+function validateRoadSystem(
+  roads: LayoutRoad[],
+  files: PositionedGraphNode[],
+  buildingPorts: Map<string, BuildingPort>,
+  throwOnRoadPolicyViolation: boolean
+): Pick<
+  RoadDebugInfo,
+  | "filePortCount"
+  | "filesWithInvalidMultipleEntrances"
+  | "routesBypassingGateway"
+  | "routesBypassingSpineOrCollector"
+  | "buildingIntersectionCount"
+  | "labelIntersectionCount"
+> {
+  const diagnostics = {
+    filePortCount: buildingPorts.size,
+    filesWithInvalidMultipleEntrances: 0,
+    routesBypassingGateway: 0,
+    routesBypassingSpineOrCollector: 0,
+    buildingIntersectionCount: 0,
+    labelIntersectionCount: 0
+  };
+  const portsByFile = new Map<string, Set<string>>();
+
+  for (const file of files) {
+    const assignedPort = buildingPorts.get(file.id);
+    if (!assignedPort || !pointOnRectBoundary(assignedPort, file)) {
+      diagnostics.filesWithInvalidMultipleEntrances += 1;
+      continue;
+    }
+    portsByFile.set(file.id, new Set([portKey(assignedPort)]));
+  }
+
+  for (const road of roads) {
+    for (const port of [road.sourceBuildingPort, road.targetBuildingPort]) {
+      if (!port) {
+        continue;
+      }
+      const assignedPort = buildingPorts.get(port.fileId);
+      const ports = portsByFile.get(port.fileId) ?? new Set<string>();
+      ports.add(portKey(port));
+      portsByFile.set(port.fileId, ports);
+      if (!assignedPort || !samePoint(assignedPort, port) || assignedPort.side !== port.side) {
+        diagnostics.filesWithInvalidMultipleEntrances += 1;
+      }
+    }
+
+    if (road.routeKind === "trunk") {
+      const startsAtGateway = road.sourceGateway && samePoint(road.points[0]!, road.sourceGateway);
+      const endsAtGateway = road.targetGateway && samePoint(road.points.at(-1)!, road.targetGateway);
+      if (!startsAtGateway || !endsAtGateway) {
+        diagnostics.routesBypassingGateway += 1;
+      }
+    }
+  }
+
+  for (const [fileId, ports] of portsByFile) {
+    const assignedPort = buildingPorts.get(fileId);
+    if (ports.size !== 1 || (assignedPort && !ports.has(portKey(assignedPort)))) {
+      diagnostics.filesWithInvalidMultipleEntrances += 1;
+    }
+  }
+
+  diagnostics.routesBypassingSpineOrCollector = countRoutesBypassingInternalLevels(roads);
+  const localRoads = roads.filter((road) => road.routeKind === "spine" || road.routeKind === "collector" || road.routeKind === "branch");
+  diagnostics.buildingIntersectionCount = countLocalBuildingIntersections(localRoads, files);
+  diagnostics.labelIntersectionCount = countLocalLabelIntersections(localRoads, files);
+
+  assertValidRoadSystem(diagnostics, files.length, throwOnRoadPolicyViolation);
+  return diagnostics;
+}
+
+function countRoutesBypassingInternalLevels(roads: LayoutRoad[]): number {
+  let count = 0;
+  const spinesByEndpoint = new Map<string, LayoutRoad[]>();
+  const collectorsByEndpoint = new Map<string, LayoutRoad[]>();
+
+  for (const road of roads) {
+    const key = endpointRoadKey(road);
+    if (!key) {
+      continue;
+    }
+    if (road.routeKind === "spine") {
+      spinesByEndpoint.set(key, [...(spinesByEndpoint.get(key) ?? []), road]);
+    } else if (road.routeKind === "collector") {
+      collectorsByEndpoint.set(key, [...(collectorsByEndpoint.get(key) ?? []), road]);
+    }
+  }
+
+  for (const road of roads) {
+    const key = endpointRoadKey(road);
+    if (!key) {
+      continue;
+    }
+    if (road.routeKind === "collector") {
+      const spines = spinesByEndpoint.get(key) ?? [];
+      if (!spines.some((spine) => pathsTouch(spine.points, road.points))) {
+        count += 1;
+      }
+    } else if (road.routeKind === "branch") {
+      const collectors = collectorsByEndpoint.get(key) ?? [];
+      if (!collectors.some((collector) => pathsTouch(collector.points, road.points))) {
+        count += 1;
+      }
+    }
+  }
+
+  return count;
+}
+
+function countLocalBuildingIntersections(roads: LayoutRoad[], files: PositionedGraphNode[]): number {
+  let count = 0;
+  for (const road of roads) {
+    const endpointFileId = road.sourceBuildingPort?.fileId ?? road.targetBuildingPort?.fileId;
+    const blockers = files.filter((file) => file.id !== endpointFileId);
+    count += countPathRectIntersections(road.points, blockers);
+  }
+  return count;
+}
+
+function countLocalLabelIntersections(roads: LayoutRoad[], files: PositionedGraphNode[]): number {
+  let count = 0;
+  const labelRects = files.map(fileLabelRect);
+  for (const road of roads) {
+    const endpointFileId = road.sourceBuildingPort?.fileId ?? road.targetBuildingPort?.fileId;
+    count += countPathRectIntersections(road.points, labelRects.filter((rect) => rect.id !== endpointFileId));
+  }
+  return count;
+}
+
+function fileLabelRect(file: PositionedGraphNode): PositionedGraphNode {
+  return {
+    ...file,
+    x: file.x + 4,
+    y: file.y + 84,
+    width: file.width - 8,
+    height: 28
+  };
+}
+
+function assertValidRoadSystem(debug: ReturnType<typeof validateRoadSystem>, visibleFileCount: number, throwOnRoadPolicyViolation: boolean): void {
+  const hasViolation =
+    visibleFileCount !== debug.filePortCount ||
+    debug.filesWithInvalidMultipleEntrances > 0 ||
+    debug.routesBypassingGateway > 0 ||
+    debug.routesBypassingSpineOrCollector > 0 ||
+    debug.buildingIntersectionCount > 0 ||
+    debug.labelIntersectionCount > 0;
+  if (hasViolation && throwOnRoadPolicyViolation) {
+    throw new Error(`Codebase Town road policy violation: ${JSON.stringify({ visibleFileCount, ...debug })}`);
+  }
+}
+
+function isDevelopmentRuntime(): boolean {
+  return typeof process === "undefined" || process.env.NODE_ENV !== "production";
+}
+
+function endpointRoadKey(road: LayoutRoad): string | undefined {
+  if (!road.trunkId || !road.endpointRole) {
+    return undefined;
+  }
+  return `${road.trunkId}:${road.endpointRole}`;
+}
+
+function pathsTouch(left: Point[], right: Point[]): boolean {
+  for (let leftIndex = 1; leftIndex < left.length; leftIndex += 1) {
+    const leftStart = left[leftIndex - 1]!;
+    const leftEnd = left[leftIndex]!;
+    for (let rightIndex = 1; rightIndex < right.length; rightIndex += 1) {
+      const rightStart = right[rightIndex - 1]!;
+      const rightEnd = right[rightIndex]!;
+      if (segmentsTouch(leftStart, leftEnd, rightStart, rightEnd)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function segmentsTouch(leftStart: Point, leftEnd: Point, rightStart: Point, rightEnd: Point): boolean {
+  if (leftStart.x === leftEnd.x && rightStart.x === rightEnd.x) {
+    return leftStart.x === rightStart.x && rangesOverlap(leftStart.y, leftEnd.y, rightStart.y, rightEnd.y);
+  }
+  if (leftStart.y === leftEnd.y && rightStart.y === rightEnd.y) {
+    return leftStart.y === rightStart.y && rangesOverlap(leftStart.x, leftEnd.x, rightStart.x, rightEnd.x);
+  }
+
+  const vertical = leftStart.x === leftEnd.x ? { start: leftStart, end: leftEnd } : { start: rightStart, end: rightEnd };
+  const horizontal = leftStart.y === leftEnd.y ? { start: leftStart, end: leftEnd } : { start: rightStart, end: rightEnd };
+  return valueBetween(vertical.start.x, horizontal.start.x, horizontal.end.x) && valueBetween(horizontal.start.y, vertical.start.y, vertical.end.y);
+}
+
+function rangesOverlap(leftStart: number, leftEnd: number, rightStart: number, rightEnd: number): boolean {
+  const leftMin = Math.min(leftStart, leftEnd);
+  const leftMax = Math.max(leftStart, leftEnd);
+  const rightMin = Math.min(rightStart, rightEnd);
+  const rightMax = Math.max(rightStart, rightEnd);
+  return leftMax >= rightMin && rightMax >= leftMin;
+}
+
+function valueBetween(value: number, start: number, end: number): boolean {
+  return value >= Math.min(start, end) && value <= Math.max(start, end);
+}
+
+function pointOnRectBoundary(point: Point, rect: PositionedGraphNode): boolean {
+  const onVerticalSide = (point.x === rect.x || point.x === rect.x + rect.width) && point.y >= rect.y && point.y <= rect.y + rect.height;
+  const onHorizontalSide = (point.y === rect.y || point.y === rect.y + rect.height) && point.x >= rect.x && point.x <= rect.x + rect.width;
+  return onVerticalSide || onHorizontalSide;
+}
+
+function samePoint(left: Point, right: Point): boolean {
+  return left.x === right.x && left.y === right.y;
+}
+
+function portKey(port: BuildingPort): string {
+  return `${port.side}:${port.x}:${port.y}`;
 }
 
 function renderedFolderIdForFile(file: FileNode, foldersById: Map<string, FolderNode>, nodeRects: Map<string, PositionedGraphNode>): string | undefined {
@@ -931,13 +1839,28 @@ function renderedFolderIdForFile(file: FileNode, foldersById: Map<string, Folder
 }
 
 function gatewayForFolder(folder: PositionedGraphNode, side: GatewaySide): FolderGateway {
-  const point = gatewayPoint(folder, side);
+  const point = folderGatewayPoint(folder, side);
   return {
+    id: `gateway:${folder.id}`,
     folderId: folder.id,
     side,
     x: point.x,
     y: point.y
   };
+}
+
+function folderGatewayPoint(folder: PositionedGraphNode, side: GatewaySide): Point {
+  const inset = localCorridorInset(folder);
+  switch (side) {
+    case "top":
+      return { x: Math.round(folder.x + inset), y: Math.round(folder.y) };
+    case "right":
+      return { x: Math.round(folder.x + folder.width), y: Math.round(folder.y + GRID_LAYOUT_CONSTANTS.folderHeaderHeight + inset) };
+    case "bottom":
+      return { x: Math.round(folder.x + inset), y: Math.round(folder.y + folder.height) };
+    case "left":
+      return { x: Math.round(folder.x), y: Math.round(folder.y + GRID_LAYOUT_CONSTANTS.folderHeaderHeight + inset) };
+  }
 }
 
 function gatewayPoint(folder: PositionedGraphNode, side: GatewaySide): Point {
@@ -951,6 +1874,175 @@ function gatewayPoint(folder: PositionedGraphNode, side: GatewaySide): Point {
     case "left":
       return { x: Math.round(folder.x), y: Math.round(folder.y + folder.height / 2) };
   }
+}
+
+function buildingPortForSide(file: PositionedGraphNode, side: GatewaySide): BuildingPort {
+  const point = gatewayPoint(file, side);
+  return {
+    fileId: file.id,
+    side,
+    x: point.x,
+    y: point.y
+  };
+}
+
+function buildFolderStreetPlans(folders: PositionedGraphNode[], files: PositionedGraphNode[]): Map<string, FolderStreetPlan> {
+  const filesByParent = groupBy(files.filter((file) => Boolean(file.parentId)), (file) => file.parentId!);
+  const plans = new Map<string, FolderStreetPlan>();
+
+  for (const folder of folders.sort(comparePositionedNodes)) {
+    const folderFiles = [...(filesByParent.get(folder.id) ?? [])].sort(comparePositionedNodes);
+    if (folderFiles.length === 0) {
+      continue;
+    }
+    plans.set(folder.id, buildFolderStreetPlan(folder, folderFiles));
+  }
+
+  return plans;
+}
+
+function buildFolderStreetPlan(folder: PositionedGraphNode, files: PositionedGraphNode[]): FolderStreetPlan {
+  const collectorsByFileId = new Map<string, StreetCollector>();
+  const portsByFileId = new Map<string, BuildingPort>();
+  const columns = groupFilesByColumn(files);
+
+  for (const [columnIndex, columnFiles] of columns.entries()) {
+    const sortedFiles = [...columnFiles].sort((a, b) => a.y - b.y || a.id.localeCompare(b.id));
+    const collectorX = collectorXForColumn(folder, sortedFiles, columnIndex);
+    const collector: StreetCollector = {
+      id: `${folder.id}:column:${columnIndex}`,
+      x: collectorX,
+      fileIds: sortedFiles.map((file) => file.id)
+    };
+    for (const file of sortedFiles) {
+      const side: GatewaySide = collectorX <= file.x ? "left" : "right";
+      collectorsByFileId.set(file.id, collector);
+      portsByFileId.set(file.id, buildingPortForSide(file, side));
+    }
+  }
+
+  return {
+    folderId: folder.id,
+    files,
+    collectorsByFileId,
+    portsByFileId
+  };
+}
+
+function groupFilesByColumn(files: PositionedGraphNode[]): PositionedGraphNode[][] {
+  const columns = groupBy([...files].sort((a, b) => a.x - b.x || a.id.localeCompare(b.id)), (file) => String(file.x));
+  return [...columns.entries()]
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([, columnFiles]) => columnFiles);
+}
+
+function collectorXForColumn(folder: PositionedGraphNode, columnFiles: PositionedGraphNode[], columnIndex: number): number {
+  const minFileX = Math.min(...columnFiles.map((file) => file.x));
+  const preferredGap = Math.round(GRID_LAYOUT_CONSTANTS.horizontalGap / 2);
+  const inset = localCorridorInset(folder);
+  const minX = Math.round(folder.x + inset);
+  const maxX = Math.round(folder.x + folder.width - inset);
+  const preferredX = minFileX - preferredGap;
+  if (columnIndex === 0) {
+    return clampToRange(preferredX, minX, maxX);
+  }
+  return clampToRange(preferredX, minX, maxX);
+}
+
+function buildEndpointStreetRoute(folder: PositionedGraphNode, gateway: FolderGateway, plan: FolderStreetPlan, file: PositionedGraphNode): EndpointStreetRoute | undefined {
+  const collector = plan.collectorsByFileId.get(file.id);
+  const port = plan.portsByFileId.get(file.id);
+  if (!collector || !port) {
+    return undefined;
+  }
+
+  const spinePoint = spineJoinPoint(gateway, collector.x, port.y);
+  const collectorTee = { x: collector.x, y: port.y };
+  const spinePath = compactPoints([gateway, spinePoint]);
+  const collectorPath = compactPoints([spinePoint, collectorTee]);
+  const spurPath = compactPoints([collectorTee, port]);
+  if (!isOrthogonalPath(spinePath) || !isOrthogonalPath(collectorPath) || !isOrthogonalPath(spurPath)) {
+    return undefined;
+  }
+  if (![spinePath, collectorPath, spurPath].every((path) => pathStaysInsideRect(path, folder))) {
+    return undefined;
+  }
+  return { file, port, spinePath, collectorPath, spurPath };
+}
+
+function spineJoinPoint(gateway: FolderGateway, collectorX: number, portY: number): Point {
+  switch (gateway.side) {
+    case "top":
+    case "bottom":
+      return { x: gateway.x, y: portY };
+    case "left":
+    case "right":
+      return { x: collectorX, y: gateway.y };
+  }
+}
+
+function mergeSpinePath(gateway: FolderGateway, paths: Point[][], endpointRole: RoadEndpointRole): Point[] {
+  const endPoints = paths.map((path) => path.at(-1)).filter((point): point is Point => Boolean(point));
+  if (endPoints.length === 0) {
+    return [];
+  }
+  const gatewayPoint = { x: gateway.x, y: gateway.y };
+  let spineEnd: Point;
+  if (gateway.side === "top" || gateway.side === "bottom") {
+    const ys = endPoints.map((point) => point.y);
+    spineEnd = { x: gateway.x, y: gateway.side === "top" ? Math.max(...ys) : Math.min(...ys) };
+  } else {
+    const xs = endPoints.map((point) => point.x);
+    spineEnd = { x: gateway.side === "left" ? Math.max(...xs) : Math.min(...xs), y: gateway.y };
+  }
+  return orientLocalPath(compactPoints([gatewayPoint, spineEnd]), endpointRole);
+}
+
+function mergeCollectorPath(paths: Point[][], endpointRole: RoadEndpointRole): Point[] {
+  const nonEmptyPaths = paths.filter((path) => path.length > 1);
+  if (nonEmptyPaths.length === 0) {
+    return [];
+  }
+  if (nonEmptyPaths.length === 1) {
+    return orientLocalPath(nonEmptyPaths[0]!, endpointRole);
+  }
+
+  const spinePoints = nonEmptyPaths.map((path) => path[0]!);
+  const teePoints = nonEmptyPaths.map((path) => path.at(-1)!);
+  const collectorX = teePoints[0]!.x;
+  const minY = Math.min(...teePoints.map((point) => point.y));
+  const maxY = Math.max(...teePoints.map((point) => point.y));
+  const spineAnchor = spinePoints.sort((a, b) => Math.abs(a.y - minY) - Math.abs(b.y - minY))[0]!;
+  const path = compactPoints([
+    spineAnchor,
+    { x: collectorX, y: spineAnchor.y },
+    { x: collectorX, y: minY },
+    { x: collectorX, y: maxY }
+  ]);
+  return orientLocalPath(path, endpointRole);
+}
+
+function orientLocalPath(points: Point[], endpointRole: RoadEndpointRole): Point[] {
+  return endpointRole === "provider" ? [...points].reverse() : points;
+}
+
+function compactPoints(points: Point[]): Point[] {
+  const compacted: Point[] = [];
+  for (const point of points) {
+    const previous = compacted.at(-1);
+    if (!previous || !samePoint(previous, point)) {
+      compacted.push({ x: Math.round(point.x), y: Math.round(point.y) });
+    }
+  }
+  return compacted;
+}
+
+function pathStaysInsideRect(points: Point[], rect: PositionedGraphNode): boolean {
+  return points.every((point) => point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height);
+}
+
+function localCorridorInset(folder: PositionedGraphNode): number {
+  return Math.min(36, Math.max(24, Math.min(folder.width, folder.height) / 7));
 }
 
 function gatewaySideForRelativePosition(source: PositionedGraphNode, target: PositionedGraphNode): GatewaySide {
@@ -1113,12 +2205,16 @@ function routeKindOrder(kind: RoadRouteKind): number {
   switch (kind) {
     case "trunk":
       return 0;
-    case "collector":
+    case "spine":
       return 1;
-    case "branch":
+    case "collector":
       return 2;
-    case "direct":
+    case "branch":
       return 3;
+    case "parent-child":
+      return 4;
+    case "direct":
+      return 5;
   }
 }
 
@@ -1494,6 +2590,10 @@ function rowWidthsForItems(items: GridItem[], columns: number): number[] {
 
 function sum(values: number[]): number {
   return values.reduce((total, value) => total + value, 0);
+}
+
+function clampToRange(value: number, min: number, max: number): number {
+  return Math.round(Math.max(min, Math.min(max, value)));
 }
 
 function groupBy<T>(items: T[], keyForItem: (item: T) => string): Map<string, T[]> {

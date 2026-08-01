@@ -29,7 +29,9 @@ The prompt mentioned `green.png`, but the provided repeating grass background is
 | `Database or Repository Building.png` | Database, repository, or persistence building | 1024x1024 | PNG | Yes | `FileShape` for `repository` files | No | Chosen for repository/model/schema/entity files and persistence folders. |
 | `Entry-Point Building.png` | Application entry-point building | 1024x1024 | PNG | Yes | `FileShape` for `entry` files | No | Used for clear application roots such as `main.ts`, `server.ts`, `bootstrap.ts`. |
 | `Index or Barrel Building.png` | Index or barrel-export building | 1024x1024 | PNG | Yes | `FileShape` for `index` files | No | Used for `index.*` and confident re-export barrels. |
-| `Folder Boundary.png` | Folder district boundary | 1536x1024 | PNG | Yes | `FolderShape` boundary image | Yes | Stretched over folder bounds; fallback stroke remains. |
+| `folder_corner.png` | Fixed folder border corner | 1536x1024 | PNG | Yes | `FolderShape` composed border corners | Yes | Cropped to artwork bounds, rendered fixed-size, and rotated for all four corners. |
+| `folder_side.png` | Stretchable folder border side rail | 1536x1024 | PNG | Yes | `FolderShape` composed border side rails | Yes | Cropped to artwork bounds. Only this rail is stretched; vertical sides rotate the horizontal rail. |
+| `folder_support.png` | Fixed folder border support | 1536x1024 | PNG | Yes | `FolderShape` composed border supports | Yes | Cropped to artwork bounds, rendered fixed-size, rotated for vertical/bottom sides, and distributed evenly along each side. |
 | `Blank Folder Sign.png` | Blank folder sign | 1024x1024 | PNG | Yes | `FolderShape` sign under dynamic label text | No | Folder names remain real SVG text. |
 | `Selected Building Overlay.png` | Selected-building overlay | 1536x1024 | PNG | Yes | `FileShape` selected overlay | No | Composited above building; CSS selected stroke also remains. |
 | `Recently Edited Overlay.png` | Recently edited overlay | 1024x1024 | PNG | Yes | `FileShape` edited overlay | No | Activated only by agent/edit state or future activity data. |
@@ -46,6 +48,7 @@ The prompt mentioned `green.png`, but the provided repeating grass background is
 - Image paths are centralized in `src/webview/assets/mapAssets.ts`.
 - The renderer never depends on image success for visibility; SVG fallback towns, buildings, roads, labels, and badges remain.
 - Folder and building images use `pointer-events: none` so they do not block folder, file, or road interaction.
+- Folder borders are composed from corner, side, and support pieces. Corners and supports keep fixed dimensions; side rails stretch to fit any folder width or height.
 - `grass03.png` repeats as an SVG pattern inside the map coordinate system so it moves with map scroll and zoom.
 - The horizontal road PNG is used only as a restrained horizontal texture layer. Programmatic SVG paths and arrow markers preserve dependency direction.
 - Folder and file labels remain real text and are not baked into images.

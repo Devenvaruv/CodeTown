@@ -56,7 +56,9 @@ export const mapAssets = {
     index: asset("Index or Barrel Building.png", false, "Index or barrel-export building")
   },
   folders: {
-    boundary: asset("Folder Boundary.png", true, "Folder district boundary"),
+    corner: asset("folder_corner.png", true, "Fixed-size folder border corner"),
+    side: asset("folder_side.png", true, "Stretchable folder border side rail"),
+    support: asset("folder_support.png", true, "Fixed-size folder border support"),
     sign: asset("Blank Folder Sign.png", false, "Blank folder sign for dynamic labels")
   },
   roads: {
