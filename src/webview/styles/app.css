@@ -662,6 +662,12 @@ h3 {
   pointer-events: none;
 }
 
+.road-direction {
+  stroke: transparent;
+  stroke-width: 1;
+  pointer-events: none;
+}
+
 .road-hit {
   stroke: transparent;
   stroke-width: 18;

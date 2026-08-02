@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { LayoutRoad } from "../src/graph/layout/elkLayout";
-import { roadPathData, roadSegments } from "../src/webview/renderer/roadGeometry";
+import { laneCountForDependencies, roadPathData, roadSegments } from "../src/webview/renderer/roadGeometry";
 
 describe("road geometry", () => {
+  it.each([
+    [10, 2],
+    [11, 4],
+    [20, 4],
+    [21, 6]
+  ] as const)("uses %i dependencies to render %i road lanes", (dependencyCount, laneCount) => {
+    expect(laneCountForDependencies(dependencyCount)).toBe(laneCount);
+  });
+
   it("keeps source-to-target point order for dependency direction", () => {
     const road = createRoad();
     expect(roadPathData(road)).toBe("M10,20 L40,20 L40,80 L100,80");

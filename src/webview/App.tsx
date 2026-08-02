@@ -7,7 +7,7 @@ import type { ExtensionToWebviewMessage } from "../shared/messageTypes";
 import { isExtensionToWebviewMessage } from "../shared/messageTypes";
 import { MAP_SIZES, assetUrl, buildingAssetForFileKind, mapAssets, type OverlayAssetKind } from "./assets/mapAssets";
 import { generateDecorScatter, type DecorScatterItem } from "./renderer/decorScatter";
-import { roadPathData } from "./renderer/roadGeometry";
+import { laneCountForDependencies, roadLanePathData, roadPathData } from "./renderer/roadGeometry";
 import { ENABLE_AGENT_ACTIVITY_DEMO, type AgentActivityState } from "./state/agentActivity";
 import { fileOverlayStates } from "./state/overlays";
 import { vscodeApi } from "./vscodeApi";
@@ -856,25 +856,36 @@ function RoadShape(props: {
   const dependencyTypeClass = props.road.dependencyTypes.length === 1 ? props.road.dependencyTypes[0] : "mixed-types";
   const roadClass = `${props.road.routeKind} ${props.road.infrastructureKind} ${props.road.endpointRole ?? ""} ${dependencyTypeClass} ${props.road.hasCircularDependency || props.connection?.isCircular ? "circular" : ""} ${props.road.isAggregated ? "aggregated" : ""} ${props.road.direction} ${props.state}`;
   const path = roadPathData(props.road);
+  const laneCount = renderedLaneCountForRoad(props.road);
+  const lanePaths = roadLanePathData(props.road, laneCount);
   const labelPoint = props.road.showCountLabel ? roadLabelPoint(props.road.points) : undefined;
   const countText = `${props.road.dependencyCount} ${props.road.dependencyCount === 1 ? "dependency" : "dependencies"}`;
   const badgeWidth = Math.max(78, countText.length * 6.4 + 16);
   const showArrow = props.road.routeKind === "trunk" && props.road.direction === "provider-to-consumer";
+  const scaledExternalRoad = props.road.infrastructureKind === "external-trunk" && laneCount > 2;
+  const scaledStrokeWidth = laneCount * 3.5;
   return (
     <g className={`road-group ${roadClass}`} onClick={props.onClick}>
-      <path d={path} className="road road-base" />
-      <path d={path} className="road road-lane" markerEnd={showArrow ? "url(#arrow)" : undefined} />
+      <path d={path} className="road road-base" style={scaledExternalRoad ? { strokeWidth: scaledStrokeWidth } : undefined} />
+      {lanePaths.map((lanePath, index) => (
+        <path key={index} d={lanePath} className="road road-lane" />
+      ))}
+      {showArrow && <path d={path} className="road road-direction" markerEnd="url(#arrow)" />}
       {labelPoint && (
         <g className="road-count" transform={`translate(${labelPoint.x}, ${labelPoint.y - 14})`}>
           <rect x={-badgeWidth / 2} y={-11} width={badgeWidth} height={18} rx={7} />
           <text y={2}>{countText}</text>
         </g>
       )}
-      <path d={path} className="road road-hit">
+      <path d={path} className="road road-hit" style={scaledExternalRoad ? { strokeWidth: scaledStrokeWidth + 12 } : undefined}>
         <title>{props.title}</title>
       </path>
     </g>
   );
+}
+
+function renderedLaneCountForRoad(road: TownLayout["roads"][number]): 2 | 4 | 6 {
+  return road.infrastructureKind === "external-trunk" ? laneCountForDependencies(road.dependencyCount) : 2;
 }
 
 function roadLabelPoint(points: Point[]): Point | undefined {
